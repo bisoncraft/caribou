@@ -82,6 +82,30 @@ func (m *SharedMN) StandbyValidFrom() int32 {
 	return int32(min(int64(m.RegisteredHeight)+int64(m.EarlyPeriodBlocks), math.MaxInt32))
 }
 
+// validate checks the share table: the share count, each amount positive and
+// the amounts adding up to the collateral. The payout arithmetic divides by
+// sums of amounts, so it relies on this.
+// It is looser than the registration terms' rules (no minimum share) on
+// purpose: it only guards this arithmetic, not what may be registered.
+func (m *SharedMN) validate() error {
+	n := len(m.Shares)
+	if n < MinShares || n > MaxShares {
+		return badDis("%d shares", n)
+	}
+	var sum int64
+	for i := range m.Shares {
+		a := m.Shares[i].Amount
+		if a <= 0 || a > CollateralAmount {
+			return badDis("share %d amount %d", i, a)
+		}
+		sum += a
+	}
+	if sum != CollateralAmount {
+		return badDis("shares add up to %d, not %d", sum, int64(CollateralAmount))
+	}
+	return nil
+}
+
 func (m *SharedMN) total() int64 {
 	var t int64
 	for i := range m.Shares {
@@ -152,10 +176,10 @@ func (m *SharedMN) Preview(p DissolveParams) (Preview, error) {
 // outputs returns the dissolution's outputs: one per share but the actor in
 // share order, then the actor's if it is not empty.
 func (m *SharedMN) outputs(p DissolveParams) ([]*wire.TxOut, error) {
-	n := len(m.Shares)
-	if n < MinShares || n > MaxShares {
-		return nil, badDis("%d shares", n)
+	if err := m.validate(); err != nil {
+		return nil, err
 	}
+	n := len(m.Shares)
 	if p.Actor < 0 || p.Actor >= n {
 		return nil, badDis("actor %d of %d shares", p.Actor, n)
 	}
@@ -259,6 +283,9 @@ func (d *Dissolution) sync() error {
 // rounded up and capped at MaxDissolutionFee. The size is exact: the input has
 // no signature script and the signatures have a fixed size.
 func FeeFor(m *SharedMN, unanimous bool, feeRate int64) (int64, error) {
+	if feeRate < 0 {
+		return 0, badDis("fee rate %d", feeRate)
+	}
 	d, err := NewDissolution(m, DissolveParams{Actor: 0, Unanimous: unanimous})
 	if err != nil {
 		return 0, err
@@ -267,8 +294,10 @@ func FeeFor(m *SharedMN, unanimous bool, feeRate int64) (int64, error) {
 	if err != nil {
 		return 0, err
 	}
-	if feeRate < 0 {
-		return 0, badDis("fee rate %d", feeRate)
+	// Past this rate the fee is over the cap, and the product below would
+	// overflow for a far larger one.
+	if feeRate > MaxDissolutionFee*1000/int64(len(raw)) {
+		return MaxDissolutionFee, nil
 	}
 	fee := (int64(len(raw))*feeRate + 999) / 1000
 	return min(fee, MaxDissolutionFee), nil
@@ -282,6 +311,9 @@ func (d *Dissolution) CheckAt(spendHeight int32) error {
 }
 
 func (m *SharedMN) check(tx *bisonwire.Tx, pd *protx.ProDisTx, spendHeight int32) error {
+	if err := m.validate(); err != nil {
+		return err
+	}
 	n := len(m.Shares)
 	if pd.ProTxHash != m.ProTxHash {
 		return badDis("bad-prodis-hash")
@@ -576,8 +608,12 @@ func ParseStandby(data []byte, m *SharedMN) (*Standby, *bisonwire.Tx, error) {
 		return nil, nil, badDis("standby tx: %v", err)
 	}
 	tx := &bisonwire.Tx{Chain: "dash"}
-	if err := tx.Deserialize(bytes.NewReader(raw)); err != nil {
+	r := bytes.NewReader(raw)
+	if err := tx.Deserialize(r); err != nil {
 		return nil, nil, badDis("standby tx: %v", err)
+	}
+	if r.Len() != 0 {
+		return nil, nil, badDis("standby tx has %d trailing bytes", r.Len())
 	}
 	var pd protx.ProDisTx
 	if err := protx.Parse(tx.ExtraPayload, &pd); err != nil {

@@ -612,3 +612,91 @@ func TestStandby(t *testing.T) {
 		}
 	}
 }
+
+// The payout arithmetic divides by sums of share amounts, so a table that is
+// not a real registration must be refused by every entry point rather than
+// panic or pay out of proportion.
+func TestShareTableValidated(t *testing.T) {
+	m, keys := threeOwners(t)
+	s, err := NewStandby(m, 0, keys[0], 1000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := s.Marshal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, edit := range map[string]func(sh []protx.Share){
+		"others hold nothing": func(sh []protx.Share) { sh[1].Amount, sh[2].Amount = 0, 0 },
+		"negative amount":     func(sh []protx.Share) { sh[1].Amount, sh[2].Amount = -1, 501e8 },
+		"short of collateral": func(sh []protx.Share) { sh[2].Amount-- },
+		"over the collateral": func(sh []protx.Share) { sh[2].Amount++ },
+	} {
+		t.Run(name, func(t *testing.T) {
+			bad := *m
+			bad.Shares = append([]protx.Share(nil), m.Shares...)
+			edit(bad.Shares)
+			if _, err := NewDissolution(&bad, DissolveParams{Actor: 0}); !errors.Is(err, ErrInvalidDissolution) {
+				t.Fatalf("NewDissolution: %v", err)
+			}
+			if _, err := bad.Preview(DissolveParams{Actor: 0}); !errors.Is(err, ErrInvalidDissolution) {
+				t.Fatalf("Preview: %v", err)
+			}
+			if _, _, err := ParseStandby(data, &bad); !errors.Is(err, ErrInvalidDissolution) {
+				t.Fatalf("ParseStandby: %v", err)
+			}
+		})
+	}
+}
+
+// A huge fee rate must cap the fee, not wrap into a negative one.
+func TestFeeForHugeRate(t *testing.T) {
+	m := coreMN(t)
+	for _, rate := range []int64{math.MaxInt64 / 100, math.MaxInt64} {
+		if fee, err := FeeFor(m, false, rate); err != nil || fee != MaxDissolutionFee {
+			t.Fatalf("rate %d: fee %d, %v", rate, fee, err)
+		}
+	}
+}
+
+// The fee is capped exactly where the rate makes it pass MaxDissolutionFee:
+// at the largest rate whose product is safe it is still computed, and one
+// more caps it.
+func TestFeeForCapBoundary(t *testing.T) {
+	m := coreMN(t)
+	d, err := NewDissolution(m, DissolveParams{Actor: 0})
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := d.Raw()
+	if err != nil {
+		t.Fatal(err)
+	}
+	size := int64(len(raw))
+	edge := MaxDissolutionFee * 1000 / size
+	want := (size*edge + 999) / 1000
+	if fee, err := FeeFor(m, false, edge); err != nil || fee != want || fee > MaxDissolutionFee {
+		t.Fatalf("rate %d: fee %d, want %d (%v)", edge, fee, want, err)
+	}
+	if fee, err := FeeFor(m, false, edge+1); err != nil || fee != MaxDissolutionFee {
+		t.Fatalf("rate %d: fee %d, want the cap (%v)", edge+1, fee, err)
+	}
+}
+
+// Bytes after the transaction would leave the stored hex different from the
+// transaction returned, so the record must be refused.
+func TestParseStandbyTrailingBytes(t *testing.T) {
+	m, keys := threeOwners(t)
+	s, err := NewStandby(m, 2, keys[2], 1000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.Tx += "00"
+	data, err := s.Marshal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := ParseStandby(data, m); !errors.Is(err, ErrInvalidDissolution) || !strings.Contains(err.Error(), "trailing") {
+		t.Fatalf("want trailing bytes refused, got %v", err)
+	}
+}

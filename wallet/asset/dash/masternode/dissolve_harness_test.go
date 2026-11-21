@@ -227,11 +227,21 @@ func TestDissolutionAcceptedByDashCore(t *testing.T) {
 	if !bytes.Equal(sbRaw, freeRaw) {
 		t.Fatal("the standby is not the penalty-free dissolution")
 	}
-	mine(t, int(sb.ValidFromHeight-tip()))
-	if tip()+1 < sb.ValidFromHeight {
-		t.Fatalf("tip %d is short of %d", tip(), sb.ValidFromHeight)
+	// Pin the boundary: the next block is the last one inside the early
+	// period, where Core must still want the penalty, and then the first one
+	// at ValidFromHeight, where it must not.
+	if tip()+2 > sb.ValidFromHeight {
+		t.Fatalf("tip %d is already past %d", tip(), sb.ValidFromHeight-2)
+	}
+	mine(t, int(sb.ValidFromHeight-2-tip()))
+	if ok, why := accepted(t, sbRaw); ok || why != "bad-prodis-penalty-floor" {
+		t.Fatalf("Core's verdict on the standby one block early: %v %q", ok, why)
+	}
+	mine(t, 1)
+	if tip()+1 != sb.ValidFromHeight {
+		t.Fatalf("next block is %d, want %d", tip()+1, sb.ValidFromHeight)
 	}
 	if ok, why := accepted(t, sbRaw); !ok {
-		t.Fatalf("Core refused the standby after the early period: %s", why)
+		t.Fatalf("Core refused the standby at the first valid height: %s", why)
 	}
 }
