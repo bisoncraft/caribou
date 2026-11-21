@@ -103,7 +103,8 @@ func NewStore(db walletdb.DB) (*Store, error) {
 	return &Store{db: db}, nil
 }
 
-// Cursor is how far discovery has scanned: the tip it scanned to. Hash is the
+// Cursor is how far discovery has scanned: a block rescanDepth below the tip it
+// scanned to, so that a reorg of that depth leaves it in the chain. Hash is the
 // double sha256 of the header at Height, a fingerprint that is only compared
 // with itself and need not be the chain's block id.
 type Cursor struct {

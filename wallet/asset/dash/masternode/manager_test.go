@@ -189,6 +189,8 @@ func newEnv(t *testing.T) *env {
 	}
 	e.chain = f
 	f.headers[tipHeight] = synthHeader(chainhash.Hash{}, tipHeight)
+	// The scan cursor is saved at this height.
+	f.headers[tipHeight-rescanDepth] = synthHeader(chainhash.Hash{}, tipHeight-rescanDepth)
 
 	var real struct {
 		BlockHeight int32    `json:"block_height"`
@@ -300,7 +302,7 @@ func TestDiscover(t *testing.T) {
 		t.Fatalf("unknown: %v", err)
 	}
 	snap := e.snapshot()
-	if snap.Cursor.Height != tipHeight || snap.Cursor.Hash != e.chain.headers[tipHeight].BlockHash() {
+	if snap.Cursor.Height != tipHeight-rescanDepth || snap.Cursor.Hash != e.chain.headers[tipHeight-rescanDepth].BlockHash() {
 		t.Fatalf("cursor %+v", snap.Cursor)
 	}
 	// Registering B at index 5 used the indexes below it.
@@ -521,7 +523,12 @@ func TestRefreshRescanDepth(t *testing.T) {
 		if err := m.Refresh(t.Context()); err != nil {
 			t.Fatal(err)
 		}
+		// addSynth replaces the header at its height, and at the cursor's
+		// height that would be a reorg, not a late entry.
+		cursorHdr := e.chain.headers[tipHeight-rescanDepth]
 		e.addSynth(e.txB, c.height)
+		synth := e.chain.headers[c.height]
+		e.chain.headers[tipHeight-rescanDepth] = cursorHdr
 		e.chain.history = slices.DeleteFunc(e.chain.history, func(h electrum.HistoryEntry) bool { return h.Height == heightB || h.Height == heightD })
 		if err := m.Refresh(t.Context()); err != nil {
 			t.Fatal(err)
@@ -530,6 +537,7 @@ func TestRefreshRescanDepth(t *testing.T) {
 			t.Fatalf("height %d: found %v", c.height, got)
 		}
 		// A full scan finds it either way.
+		e.chain.headers[c.height] = synth
 		if err := m.Discover(t.Context()); err != nil {
 			t.Fatal(err)
 		}
@@ -570,7 +578,7 @@ func TestRefreshReorg(t *testing.T) {
 			t.Fatal("setup")
 		}
 		// The block at the cursor changes.
-		e.chain.headers[tipHeight] = synthHeader(chainhash.Hash{7}, tipHeight)
+		e.chain.headers[tipHeight-rescanDepth] = synthHeader(chainhash.Hash{7}, tipHeight-rescanDepth)
 		return e, m
 	}
 	// A reorg that does not reach a block leaves what it proved, whatever the
@@ -733,6 +741,14 @@ func TestDiscoverSkipsUnprovableBelowStart(t *testing.T) {
 	if _, err := m.SharedMN(t.Context(), e.b.ProTxHash, false); !errors.Is(err, ErrUnknownMN) {
 		t.Fatalf("B: %v", err)
 	}
+	// B's owner key, index 2, is on chain even though it could not be proven,
+	// so its index must not be handed out again.
+	if n := e.snapshot().NextOwner; n != 3 {
+		t.Fatalf("owner counter %d, want 3", n)
+	}
+	if idx, err := e.store.ReserveOwnerIndex(); err != nil || idx != 3 {
+		t.Fatalf("reserved %d, %v", idx, err)
+	}
 }
 
 // A spend below the chain's headers of a registration the wallet already holds
@@ -750,7 +766,7 @@ func TestDiscoverSkipsUnprovableSpend(t *testing.T) {
 	delete(e.chain.headers, heightB)
 	delete(e.chain.headers, heightD)
 	e.chain.headers[tipHeight] = synthHeader(chainhash.Hash{7}, tipHeight)
-	if err := m.Refresh(t.Context()); !errors.Is(err, ErrUnprovable) {
+	if err := m.Discover(t.Context()); !errors.Is(err, ErrUnprovable) {
 		t.Fatalf("%v", err)
 	}
 	if _, err := m.SharedMN(t.Context(), e.b.ProTxHash, false); err != nil {
@@ -885,7 +901,7 @@ func TestSharedMN(t *testing.T) {
 		e.chain.headers[800] = synthHeader(e.a.ProTxHash, 800)
 		e.chain.proofs[id] = &electrum.MerkleProof{BlockHeight: 800}
 		e.setHistory(entry(800, e.a.ProTxHash))
-		e.chain.headers[tipHeight] = synthHeader(chainhash.Hash{3}, tipHeight)
+		e.chain.headers[tipHeight-rescanDepth] = synthHeader(chainhash.Hash{3}, tipHeight-rescanDepth)
 		c, err := m.SharedMN(ctx, e.a.ProTxHash, true)
 		if err != nil {
 			t.Fatal(err)
@@ -927,4 +943,77 @@ func TestManagerConcurrent(t *testing.T) {
 		}()
 	}
 	wg.Wait()
+}
+
+// An orphaned tip is routine and must not make a Refresh read every shared
+// registration on the network again: only the window below the cursor is.
+func TestRefreshAfterOrphanedTipIsIncremental(t *testing.T) {
+	e := newEnv(t)
+	e.own(map[uint32][20]byte{1: e.idA}, 0) // B is another wallet's
+	e.setHistory(entry(heightA, e.a.ProTxHash), entry(heightB, e.b.ProTxHash))
+	m := e.manager()
+	if err := m.Refresh(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	other := e.b.ProTxHash.String()
+	if e.chain.rawCalls[other] != 1 {
+		t.Fatalf("another wallet's registration was read %d times", e.chain.rawCalls[other])
+	}
+	e.chain.headers[tipHeight] = synthHeader(chainhash.Hash{7}, tipHeight)
+	if err := m.Refresh(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if e.chain.rawCalls[other] != 1 {
+		t.Fatalf("an orphaned tip read it again: %d reads", e.chain.rawCalls[other])
+	}
+	if m.StakedAmount() != e.a.Shares[0].Amount {
+		t.Fatal("A lost")
+	}
+}
+
+// A reorg deeper than the window moves the cursor's block, and then everything
+// is read again: the new chain can put a spend far below the window, where an
+// incremental scan would never look.
+func TestRefreshAfterDeepReorgReadsEverything(t *testing.T) {
+	e := newEnv(t)
+	e.own(map[uint32][20]byte{2: e.idB}, 0)
+	e.setHistory(entry(heightB, e.b.ProTxHash))
+	m := e.manager()
+	if err := m.Discover(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.SharedMN(t.Context(), e.b.ProTxHash, false); err != nil {
+		t.Fatalf("B: %v", err)
+	}
+	// The new chain has B's spend at 850, far below the window, and the cursor's
+	// block is not the one it saved.
+	e.addSynth(e.txD, 850)
+	e.chain.headers[tipHeight-rescanDepth] = synthHeader(chainhash.Hash{7}, tipHeight-rescanDepth)
+	if err := m.Refresh(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.SharedMN(t.Context(), e.b.ProTxHash, false); !errors.Is(err, ErrDissolved) {
+		t.Fatalf("B: %v", err)
+	}
+}
+
+// A transaction that spends a collateral dissolves it whatever its type, so a
+// registration that spends another's collateral does too.
+func TestRegistrationThatSpendsACollateralDissolvesIt(t *testing.T) {
+	e := newEnv(t)
+	e.own(map[uint32][20]byte{1: e.idA, 2: e.idB}, 0)
+	e.setHistory(entry(heightA, e.a.ProTxHash))
+	spender := *e.txB
+	spender.TxIn = append(slices.Clone(e.txB.TxIn), wire.NewTxIn(&e.a.Collateral, nil, nil))
+	e.addSynth(&spender, 905)
+	m := e.manager()
+	if err := m.Discover(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.SharedMN(t.Context(), e.a.ProTxHash, false); !errors.Is(err, ErrDissolved) {
+		t.Fatalf("A: %v", err)
+	}
+	if _, ok := e.snapshot().Dissolutions[e.a.ProTxHash]; !ok {
+		t.Fatal("the spend was not saved")
+	}
 }

@@ -31,10 +31,12 @@ const (
 	// derives before it stops looking for the wallet's registrations.
 	ownerGap = 20
 
-	// rescanDepth is how many blocks below the cursor an incremental scan
-	// reads again, in case the server's history lags its headers. An entry
-	// the server lists more than this many blocks late is not seen until the
-	// next Discover.
+	// rescanDepth is how far below the tip a scan saves its cursor, which is
+	// also how many blocks an incremental scan reads again, in case the
+	// server's history lags its headers. A reorg this deep leaves the cursor's
+	// block in the chain, so the scan stays incremental. An entry the server
+	// lists more than this many blocks late is not seen by Refresh, only by
+	// Discover, so a caller should run Discover on startup and now and then.
 	rescanDepth = 6
 )
 
@@ -209,8 +211,9 @@ func (m *Manager) Discover(ctx context.Context) error {
 	return m.scan(ctx, true)
 }
 
-// Refresh reads what is new since the last scan. If the chain has reorganised
-// since, it reads everything again.
+// Refresh reads what is new since the last scan, from the cursor, which is
+// rescanDepth blocks below the tip of that scan. If the chain has reorganised
+// past the cursor's block, it reads everything again.
 //
 // Either way, what is stored stays while the block that proved it is still in
 // the chain, whatever the server's history says now: a server that leaves
@@ -218,6 +221,19 @@ func (m *Manager) Discover(ctx context.Context) error {
 // dropped only when its block is gone, and found again if the new chain has it.
 func (m *Manager) Refresh(ctx context.Context) error {
 	return m.scan(ctx, false)
+}
+
+// cursorFor is the cursor to save after a scan to tip: the block rescanDepth
+// below it, which a reorg of that depth leaves in the chain, or the tip itself
+// if that block has no header.
+func (m *Manager) cursorFor(tip int32, tipHdr *wire.BlockHeader) *Cursor {
+	h := max(tip-rescanDepth, m.chain.StartHeight(), 1)
+	if h < tip {
+		if hdr := m.chain.HeaderByHeight(h); hdr != nil {
+			return &Cursor{Height: h, Hash: hdr.BlockHash()}
+		}
+	}
+	return &Cursor{Height: tip, Hash: tipHdr.BlockHash()}
 }
 
 type candidate struct {
@@ -241,6 +257,10 @@ func (m *Manager) scan(ctx context.Context, full bool) error {
 	if tipHdr == nil {
 		return fmt.Errorf("no header at tip %d", tip)
 	}
+	// The cursor is rescanDepth blocks below the tip it was saved at, so a
+	// reorg of up to that depth, which is routine, leaves its block in the
+	// chain and the scan incremental. A cursor block that is gone means a deeper
+	// reorg, which can move anything, and everything is read again.
 	if !full {
 		cur := snap.Cursor
 		if cur.Height <= 0 {
@@ -251,7 +271,7 @@ func (m *Manager) scan(ctx context.Context, full bool) error {
 	}
 	from := int32(0)
 	if !full {
-		from = max(snap.Cursor.Height-rescanDepth, 0)
+		from = snap.Cursor.Height
 	}
 
 	stored, err := parseRegistrations(snap)
@@ -260,7 +280,7 @@ func (m *Manager) scan(ctx context.Context, full bool) error {
 	}
 	up := Update{
 		Dissolutions: make(map[chainhash.Hash]Spend),
-		Cursor:       &Cursor{Height: tip, Hash: tipHdr.BlockHash()},
+		Cursor:       m.cursorFor(tip, tipHdr),
 	}
 	// What is stored stays while its block does. A registration whose block is
 	// gone is dropped with its spend, and a spend whose block is gone alone.
@@ -284,6 +304,10 @@ func (m *Manager) scan(ctx context.Context, full bool) error {
 		}
 	}
 
+	// The server returns the whole history of the script, which every shared
+	// masternode on the network adds to, and a server may refuse one past its
+	// size limit. Reading only what changed needs a status subscription or a
+	// per-masternode marker, which is not done yet.
 	history, err := m.chain.GetHistory(ctx, sharedCollateralScripthash)
 	if err != nil {
 		return fmt.Errorf("history: %w", err)
@@ -329,11 +353,15 @@ func (m *Manager) scan(ctx context.Context, full bool) error {
 		cands = append(cands, c)
 	}
 
-	ours, newIDs, err := m.matchOwners(snap, cands)
+	ours, newIDs, minNext, err := m.matchOwners(snap, cands)
 	if err != nil {
 		return err
 	}
 	up.OwnerKeyIDs = newIDs
+	// An owner key id of the wallet's in a registration is used on chain
+	// whether or not the registration can be proven and saved below, so the
+	// counter moves past it either way.
+	up.MinNextOwner = minNext
 
 	// A transaction below the chain's headers has no header to prove it
 	// against. It is skipped, and the scan says so once it has saved the rest.
@@ -354,10 +382,9 @@ func (m *Manager) scan(ctx context.Context, full bool) error {
 		up.Registrations = append(up.Registrations, Registration{Height: c.height, Block: block, Tx: c.raw})
 		live[c.txid] = c.mn
 	}
+	// Any transaction that spends a collateral dissolves it, whatever its
+	// type, so a registration is checked too.
 	for _, c := range cands {
-		if c.mn != nil {
-			continue
-		}
 		for h, mn := range live {
 			if !mn.SpendsCollateral(c.tx) {
 				continue
@@ -401,8 +428,10 @@ func isOurs(mn *SharedMN, ours map[[protx.KeyIDSize]byte]struct{}) bool {
 // matchOwners finds which owner key ids in the registrations among cands are
 // the wallet's: those it derives at an index below the owner counter plus the
 // gap, where each hit moves the limit to the gap past it. It returns the set of
-// the wallet's ids found and the ids it had to derive, which the caller caches.
-func (m *Manager) matchOwners(snap Snapshot, cands []*candidate) (map[[protx.KeyIDSize]byte]struct{}, map[uint32][protx.KeyIDSize]byte, error) {
+// the wallet's ids found, the ids it had to derive, which the caller caches,
+// and the owner counter those hits require: one past the highest index hit, or
+// 0 if none.
+func (m *Manager) matchOwners(snap Snapshot, cands []*candidate) (map[[protx.KeyIDSize]byte]struct{}, map[uint32][protx.KeyIDSize]byte, uint32, error) {
 	want := make(map[[protx.KeyIDSize]byte]struct{})
 	for _, c := range cands {
 		if c.mn == nil {
@@ -415,28 +444,30 @@ func (m *Manager) matchOwners(snap Snapshot, cands []*candidate) (map[[protx.Key
 	ours := make(map[[protx.KeyIDSize]byte]struct{})
 	newIDs := make(map[uint32][protx.KeyIDSize]byte)
 	if len(want) == 0 {
-		return ours, newIDs, nil
+		return ours, newIDs, 0, nil
 	}
 	cached := make(map[uint32][protx.KeyIDSize]byte, len(snap.OwnerKeyIDs))
 	for id, idx := range snap.OwnerKeyIDs {
 		cached[idx] = id
 	}
+	var minNext uint32
 	limit := uint64(snap.NextOwner) + ownerGap
 	for idx := uint32(0); uint64(idx) < limit && idx <= maxMasternodeIdx; idx++ {
 		id, ok := cached[idx]
 		if !ok {
 			var err error
 			if id, err = ownerKeyID(m.keys, m.coinType, idx); err != nil {
-				return nil, nil, err
+				return nil, nil, 0, err
 			}
 			newIDs[idx] = id
 		}
 		if _, hit := want[id]; hit {
 			ours[id] = struct{}{}
 			limit = max(limit, uint64(idx)+1+ownerGap)
+			minNext = idx + 1
 		}
 	}
-	return ours, newIDs, nil
+	return ours, newIDs, minNext, nil
 }
 
 // SharedMN returns a copy of the masternode with hash. With fresh set, the
