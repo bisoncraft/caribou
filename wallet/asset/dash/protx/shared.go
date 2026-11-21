@@ -98,8 +98,8 @@ func (p *ProUpShareTx) Serialize(w io.Writer) error {
 	if _, err := w.Write(p.InputsHash[:]); err != nil {
 		return err
 	}
-	if len(p.Sig) != CompactSigSize {
-		return fmt.Errorf("%w: signature is %d bytes, want %d", ErrFieldTooLong, len(p.Sig), CompactSigSize)
+	if len(p.Sig) < CompactSigSize {
+		return fmt.Errorf("%w: %d bytes, want %d", ErrBadSigSize, len(p.Sig), CompactSigSize)
 	}
 	return writeBytes(w, "sig", p.Sig, CompactSigSize)
 }
@@ -128,8 +128,8 @@ func (p *ProUpShareTx) Deserialize(r io.Reader) error {
 	if p.Sig, err = readBytes(r, "sig", CompactSigSize); err != nil {
 		return err
 	}
-	if len(p.Sig) != CompactSigSize {
-		return fmt.Errorf("%w: signature is %d bytes, want %d", ErrFieldTooLong, len(p.Sig), CompactSigSize)
+	if len(p.Sig) < CompactSigSize {
+		return fmt.Errorf("%w: %d bytes, want %d", ErrBadSigSize, len(p.Sig), CompactSigSize)
 	}
 	return nil
 }

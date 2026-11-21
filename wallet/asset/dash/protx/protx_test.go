@@ -29,8 +29,8 @@ import (
 
 // The vectors in testdata are transactions built and accepted by Dash Core on
 // regtest (see util/testing/dash). Each file holds the raw transaction and the
-// fields dashd decoded from it. regfund, regext, updserv, updreg and revoke
-// come from v23.1.4. regshared, regshared_nonet, regevo, regevo_multi,
+// fields dashd decoded from it. regfund, regext, regevo_v2, updserv, updreg and
+// revoke come from v23.1.4. regshared, regshared_nonet, regevo, regevo_multi,
 // upshare, upsharedreg, dis and dis_standby come from v24.0.0 with V24 active
 // (the harness `V24_VBPARAMS`), using throwaway keys: the raw transaction and
 // the one payload key of `getrawtransaction <txid> 1` were copied from the
@@ -73,6 +73,10 @@ type dashdProReg struct {
 	EarlyPeriodBlocks uint32              `json:"earlyPeriodBlocks"`
 	EarlyPenalty      int64               `json:"earlyPenalty"`
 	PlatformNodeID    string              `json:"platformNodeID"`
+
+	// Version 2 EvoNode (the ports are in the addresses from version 3).
+	PlatformP2PPort  uint16 `json:"platformP2PPort"`
+	PlatformHTTPPort uint16 `json:"platformHTTPPort"`
 }
 
 type dashdPayout struct {
@@ -662,8 +666,8 @@ func TestSerializeRejectsUnsupported(t *testing.T) {
 		{"ProUpRegTx sig", &ProUpRegTx{Version: Version, PayloadSig: long(maxSigSize + 1)}, ErrFieldTooLong},
 		{"ProUpShareTx script", &ProUpShareTx{Version: SharedVersion, ScriptReward: long(maxScriptSize + 1)}, ErrFieldTooLong},
 		{"ProUpShareTx sig", &ProUpShareTx{Version: SharedVersion, Sig: long(maxSigSize + 1)}, ErrFieldTooLong},
-		{"ProUpShareTx empty sig", &ProUpShareTx{Version: SharedVersion}, ErrFieldTooLong},
-		{"ProUpShareTx short sig", &ProUpShareTx{Version: SharedVersion, Sig: long(CompactSigSize - 1)}, ErrFieldTooLong},
+		{"ProUpShareTx empty sig", &ProUpShareTx{Version: SharedVersion}, ErrBadSigSize},
+		{"ProUpShareTx short sig", &ProUpShareTx{Version: SharedVersion, Sig: long(CompactSigSize - 1)}, ErrBadSigSize},
 		{"ProUpShareTx long sig", &ProUpShareTx{Version: SharedVersion, Sig: long(CompactSigSize + 1)}, ErrFieldTooLong},
 		{"ProDisTx sigs", &ProDisTx{Version: SharedVersion, Sigs: make([][CompactSigSize]byte, maxCount+1)}, ErrFieldTooLong},
 		{"ProUpSharedRegTx sigs", &ProUpSharedRegTx{Version: SharedVersion, Sigs: make([][CompactSigSize]byte, maxCount+1)}, ErrFieldTooLong},

@@ -13,7 +13,7 @@
 // and EvoNode); the other DIP-3 payloads at version 3 are not supported yet.
 // Released chains accept version 3 only once DEPLOYMENT_V24 activates. The
 // layouts were pinned against transactions built by Dash Core v23.1.4 (version
-// 2) and v24.0.0 (version 3, types 10 to 12), see testdata.
+// 2, regular and EvoNode) and v24.0.0 (version 3, types 10 to 12), see testdata.
 //
 // Decoding a version 3 ProRegTx and encoding it again gives the same bytes,
 // but a hash over a payload this wallet did not build must still use the bytes
@@ -104,6 +104,9 @@ var (
 	// can be read back, and by Deserialize. An address over the BIP155 limit
 	// is ErrUnsupportedNetInfo.
 	ErrFieldTooLong = errors.New("provider tx field too long")
+	// ErrBadSigSize is returned for a ProUpShareTx signature shorter than a
+	// compact signature; a longer one is ErrFieldTooLong.
+	ErrBadSigSize = errors.New("provider tx signature has the wrong size")
 	// ErrTrailingData is returned when a payload has bytes after the last
 	// field.
 	ErrTrailingData = errors.New("trailing data after provider tx payload")

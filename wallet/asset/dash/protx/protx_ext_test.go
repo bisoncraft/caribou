@@ -505,9 +505,13 @@ func TestProUpShareTxDecodeSigLength(t *testing.T) {
 	for _, n := range []int{0, CompactSigSize - 1, CompactSigSize + 1} {
 		raw := append(append([]byte{}, good[:at]...), byte(n))
 		raw = append(raw, make([]byte, n)...)
+		want := ErrBadSigSize
+		if n > CompactSigSize {
+			want = ErrFieldTooLong
+		}
 		var got ProUpShareTx
-		if err := got.Deserialize(bytes.NewReader(raw)); !errors.Is(err, ErrFieldTooLong) {
-			t.Errorf("%d byte signature: got %v, want ErrFieldTooLong", n, err)
+		if err := got.Deserialize(bytes.NewReader(raw)); !errors.Is(err, want) {
+			t.Errorf("%d byte signature: got %v, want %v", n, err, want)
 		}
 	}
 }
@@ -668,6 +672,41 @@ func TestParseNetInfo(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestProRegTxV2EvoNodeDashd decodes a version 2 EvoNode registration built
+// and accepted by Dash Core v23.1.4 (protx register_fund_evo), with distinct
+// platform ports so a swapped or big endian read shows, and checks every field
+// against what dashd decoded from the same bytes.
+func TestProRegTxV2EvoNodeDashd(t *testing.T) {
+	t.Parallel()
+
+	v, tx := loadVector(t, "regevo_v2")
+	d := v.Dashd.ProRegTx
+	var p ProRegTx
+	if err := Parse(tx.ExtraPayload, &p); err != nil {
+		t.Fatal(err)
+	}
+	if p.Version != Version || p.Version != d.Version || p.MNType != TypeEvo || p.MNType != d.Type {
+		t.Fatalf("version %d type %d, dashd %d and %d", p.Version, p.MNType, d.Version, d.Type)
+	}
+	if got := reversedHex(p.PlatformNodeID[:]); got != d.PlatformNodeID {
+		t.Errorf("platform node id %s, dashd %s", got, d.PlatformNodeID)
+	}
+	if p.PlatformP2PPort != d.PlatformP2PPort || p.PlatformHTTPPort != d.PlatformHTTPPort {
+		t.Errorf("platform ports %d and %d, dashd %d and %d",
+			p.PlatformP2PPort, p.PlatformHTTPPort, d.PlatformP2PPort, d.PlatformHTTPPort)
+	}
+	if p.PlatformP2PPort == p.PlatformHTTPPort || p.PlatformP2PPort>>8 == p.PlatformP2PPort&0xff {
+		t.Fatalf("vector ports %d and %d would not catch a byte order mistake", p.PlatformP2PPort, p.PlatformHTTPPort)
+	}
+	if got := mustHash(t, d.InputsHash); p.InputsHash != got || InputsHash(tx.TxIn) != got {
+		t.Errorf("inputs hash %s, dashd %s", p.InputsHash, got)
+	}
+	if p.Service.Port != 19899 || d.Service != "8.8.8.8:19899" {
+		t.Errorf("service port %d, dashd %s", p.Service.Port, d.Service)
+	}
+	roundTrip(t, tx, &p)
 }
 
 // TestProRegTxV2EvoNode checks a version 2 EvoNode registration against the
