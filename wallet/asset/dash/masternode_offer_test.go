@@ -736,3 +736,75 @@ func TestRegisteredOffer(t *testing.T) {
 		t.Fatal("cancelled the offer of a registered masternode")
 	}
 }
+
+// An offer that has signed its inputs does not go back: a blob that lacks
+// another owner's join signature, such as the one first reviewed, is refused
+// and leaves the offer signed, so the registration it signed can still be
+// broadcast. The signed blob itself can be reviewed and signed again, and a
+// retry keeps the first expiry and leases only until it.
+func TestSignedOfferStaysSigned(t *testing.T) {
+	ctx := t.Context()
+	r := newOfferRig(t)
+	r.fund(t)
+	o, err := r.dw.CreateMasternodeOffer(ctx, 500e8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tx := r.build(t, o, rigFee)
+	rv, err := r.dw.ReviewMasternodeRegistration(ctx, o.ID, blobOf(t, tx))
+	if err != nil {
+		t.Fatal(err)
+	}
+	own, err := r.dw.SignMasternodeRegistration(ctx, o.ID, blobOf(t, tx), rv.ReviewID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var b1 masternode.Blob
+	if err := json.Unmarshal([]byte(own.Blob), &b1); err != nil {
+		t.Fatal(err)
+	}
+	complete := blobOf(t, tx, append(r.othersConsent(t, tx), b1.Signatures...)...)
+	first, err := r.dw.SignMasternodeRegistration(ctx, o.ID, complete, rv.ReviewID)
+	if err != nil || !first.Complete {
+		t.Fatalf("%v %v", first, err)
+	}
+	list, _ := r.dw.MasternodeOffers(ctx)
+	expires := list[0].ExpiresAt
+
+	// The stale blob is refused, and the offer is still signed.
+	if _, err := r.dw.SignMasternodeRegistration(ctx, o.ID, blobOf(t, tx), rv.ReviewID); err == nil ||
+		!strings.Contains(err.Error(), "has signed") {
+		t.Fatalf("a signed offer signed a registration that lacks join signatures: %v", err)
+	}
+	if list, _ := r.dw.MasternodeOffers(ctx); list[0].State != "signed" {
+		t.Fatalf("the offer went back to %s", list[0].State)
+	}
+
+	// The blob the wallet returned carries its input signatures, and can be
+	// reviewed and signed again.
+	if _, err := r.dw.ReviewMasternodeRegistration(ctx, o.ID, first.Blob); err != nil {
+		t.Fatalf("reviewing the signed blob: %v", err)
+	}
+	r.now = r.now.Add(time.Hour)
+	again, err := r.dw.SignMasternodeRegistration(ctx, o.ID, first.Blob, rv.ReviewID)
+	if err != nil {
+		t.Fatalf("signing the signed blob: %v", err)
+	}
+	if again.Blob != first.Blob {
+		t.Fatal("signing the signed blob gave another one")
+	}
+
+	// The retry did not push the expiry out, and the leases end at it.
+	list, _ = r.dw.MasternodeOffers(ctx)
+	if list[0].ExpiresAt != expires {
+		t.Fatalf("expiry moved from %d to %d", expires, list[0].ExpiresAt)
+	}
+	if len(r.fw.leases) != 2 {
+		t.Fatalf("%d leases, want the offer's 2 inputs", len(r.fw.leases))
+	}
+	for _, d := range r.fw.leases {
+		if d != signedLifetime-time.Hour {
+			t.Fatalf("a retry's lease is %v, want %v", d, signedLifetime-time.Hour)
+		}
+	}
+}

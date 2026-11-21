@@ -150,6 +150,8 @@ func (o *Offer) Own(tx *bisonwire.Tx) (Own, error) {
 	terms.Shares[idx].KeyIDOwner = o.OwnerKeyID
 	terms.Shares[idx].RefundScript = slices.Clone(o.RefundScript)
 	terms.Shares[idx].RewardScript = slices.Clone(o.RewardScript)
+	// Fee is not what the owners agreed to: Review splits it evenly, so this
+	// total gives the offer exactly its own portion.
 	return Own{
 		ShareIndex:   idx,
 		Terms:        terms,
@@ -165,6 +167,16 @@ func (o *Offer) Own(tx *bisonwire.Tx) (Own, error) {
 func (o *Offer) Review(tx *bisonwire.Tx, rules NetRules) (*OfferReview, error) {
 	if o.State != OfferOpen && o.State != OfferConsented && o.State != OfferSigned {
 		return nil, fmt.Errorf("%w: the offer is %s", ErrOfferMismatch, o.State)
+	}
+	// A signed offer's own inputs carry its signatures in the blob it gave out
+	// and in the final one. Review refuses an own input that is already signed,
+	// so look at the registration without them: signing it again gives the same
+	// signatures, which the caller checks against what it stored.
+	if o.State == OfferSigned {
+		var err error
+		if tx, err = o.withoutOwnScripts(tx); err != nil {
+			return nil, err
+		}
 	}
 	own, err := o.Own(tx)
 	if err != nil {
@@ -182,6 +194,23 @@ func (o *Offer) Review(tx *bisonwire.Tx, rules NetRules) (*OfferReview, error) {
 		return nil, err
 	}
 	return &OfferReview{RegReview: rv, ShareIndex: own.ShareIndex, ID: id}, nil
+}
+
+// withoutOwnScripts is a copy of tx whose inputs that the offer funds have no
+// signature script.
+func (o *Offer) withoutOwnScripts(tx *bisonwire.Tx) (*bisonwire.Tx, error) {
+	cp, err := cloneTx(tx)
+	if err != nil {
+		return nil, err
+	}
+	for _, in := range cp.TxIn {
+		for _, fi := range o.Inputs {
+			if in.PreviousOutPoint == fi.OutPoint {
+				in.SignatureScript = nil
+			}
+		}
+	}
+	return cp, nil
 }
 
 // CanonicalTx is the serialization of tx without its input signature scripts,

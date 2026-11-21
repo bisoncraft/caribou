@@ -345,7 +345,7 @@ func (dw *dashWallet) toAssetOffer(o *masternode.Offer, state string) *asset.Mas
 		ID: hex.EncodeToString(o.ID[:]), State: state,
 		CreatedAt: o.CreatedAt, ExpiresAt: o.ExpiresAt,
 		Amount: uint64(o.Amount), MaxFee: uint64(o.MaxFee),
-		OwnerAddress:  dw.keysOf([48]byte{}, o.OwnerKeyID).VotingAddress,
+		OwnerAddress:  dw.keyIDAddr(o.OwnerKeyID),
 		RefundAddress: dw.addrOf(o.RefundScript),
 		RewardAddress: dw.addrOf(o.RewardScript),
 		ChangeAddress: dw.addrOf(o.ChangeScript),
@@ -360,6 +360,15 @@ func (dw *dashWallet) toAssetOffer(o *masternode.Offer, state string) *asset.Mas
 	return out
 }
 
+// keyIDAddr is the pay to key hash address of a key id.
+func (dw *dashWallet) keyIDAddr(id [protx.KeyIDSize]byte) string {
+	a, err := btcutil.NewAddressPubKeyHash(id[:], dw.net)
+	if err != nil {
+		return hex.EncodeToString(id[:])
+	}
+	return a.EncodeAddress()
+}
+
 // addrOf is the address of a pay to key hash script, or the script in hex.
 func (dw *dashWallet) addrOf(script []byte) string {
 	if txscript.IsPayToPubKeyHash(script) {
@@ -371,7 +380,9 @@ func (dw *dashWallet) addrOf(script []byte) string {
 }
 
 // CancelMasternodeOffer releases an offer's inputs and deletes it. It does not
-// take back signatures the offer gave.
+// take back signatures the offer gave: a signed registration can still be
+// broadcast by anyone who has it until one of its inputs is spent, and
+// releasing the inputs does not spend them.
 func (dw *dashWallet) CancelMasternodeOffer(ctx context.Context, offerID string) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -548,6 +559,12 @@ func (dw *dashWallet) SignMasternodeRegistration(ctx context.Context, offerID, b
 	}
 
 	complete := rv.Complete() == nil
+	// An offer that has signed never goes back to consented: its input
+	// signatures are out, and a blob without every join signature would drop
+	// the digest guard below and hide the signed registration from broadcast.
+	if !complete && o.State == masternode.OfferSigned {
+		return nil, errors.New("the offer has signed: send the complete registration")
+	}
 	if complete {
 		if err := rv.SignInputs(walletSecrets{fw: fw, net: dw.net}); err != nil {
 			return nil, err
@@ -570,15 +587,22 @@ func (dw *dashWallet) SignMasternodeRegistration(ctx context.Context, offerID, b
 		}
 		o.SignedDigest = digest
 		// The signatures stay good until an input is spent: keep the inputs
-		// leased for as long as the registration can be broadcast.
+		// leased for as long as the registration can be broadcast. A retry
+		// keeps the first expiry and leases only until it.
+		now := dw.clock()
+		expires := now.Add(signedLifetime).Unix()
+		if o.State == masternode.OfferSigned {
+			expires = o.ExpiresAt
+		}
+		lease := time.Unix(expires, 0).Sub(now)
 		for _, fi := range o.Inputs {
-			if _, err := fw.LeaseOutput(wtxmgr.LockID(o.ID), fi.OutPoint, signedLifetime); err != nil {
+			if _, err := fw.LeaseOutput(wtxmgr.LockID(o.ID), fi.OutPoint, lease); err != nil {
 				return nil, fmt.Errorf("keeping %v leased: %w", fi.OutPoint, err)
 			}
 		}
 		o.State = masternode.OfferSigned
 		o.ConsentHash = rv.ConsentHash
-		o.ExpiresAt = dw.clock().Add(signedLifetime).Unix()
+		o.ExpiresAt = expires
 	} else {
 		o.State = masternode.OfferConsented
 		o.ConsentHash = rv.ConsentHash
