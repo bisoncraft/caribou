@@ -336,7 +336,7 @@ func Review(tx *bisonwire.Tx, rules NetRules, own Own) (*RegReview, error) {
 	}
 	share := &pr.Shares[own.ShareIndex]
 	n := len(pr.Shares)
-	if own.Fee < 0 || own.Fee > int64(n)*MaxFeePortion {
+	if own.Fee < 0 || FeePortion(own.Fee, 0, n) > MaxFeePortion {
 		return nil, bad("fee %d", own.Fee)
 	}
 
@@ -358,6 +358,9 @@ func Review(tx *bisonwire.Tx, rules NetRules, own Own) (*RegReview, error) {
 		i, ok := seen[fi.OutPoint]
 		if !ok {
 			return nil, bad("own input %v is missing", fi.OutPoint)
+		}
+		if _, dup := prev[i]; dup {
+			return nil, bad("own input %v is listed twice", fi.OutPoint)
 		}
 		if len(tx.TxIn[i].SignatureScript) != 0 {
 			return nil, bad("own input %v already has a signature script", fi.OutPoint)
@@ -523,8 +526,12 @@ func ParseBlob(data []byte) (*bisonwire.Tx, []ShareSig, error) {
 		return nil, nil, fmt.Errorf("%w: blob tx: %w", ErrInvalidProposal, err)
 	}
 	tx := &bisonwire.Tx{Chain: "dash"}
-	if err := tx.Deserialize(bytes.NewReader(raw)); err != nil {
+	r := bytes.NewReader(raw)
+	if err := tx.Deserialize(r); err != nil {
 		return nil, nil, fmt.Errorf("%w: blob tx: %w", ErrInvalidProposal, err)
+	}
+	if r.Len() != 0 {
+		return nil, nil, bad("blob tx has %d trailing bytes", r.Len())
 	}
 	return tx, b.Signatures, nil
 }

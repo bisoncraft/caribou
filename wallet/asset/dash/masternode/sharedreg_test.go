@@ -338,6 +338,10 @@ func TestReviewRejects(t *testing.T) {
 		{"fee shifted onto the owner", func(t *testing.T, tx *bisonwire.Tx, own *Own) { tx.TxOut[1].Value -= 900_000 }, "want exactly"},
 		{"fee total disagrees", func(t *testing.T, tx *bisonwire.Tx, own *Own) { own.Fee = 6000 }, "want exactly"},
 		{"fee out of range", func(t *testing.T, tx *bisonwire.Tx, own *Own) { own.Fee = -1 }, "fee"},
+		{"remainder pushes the first share over the cap", func(t *testing.T, tx *bisonwire.Tx, own *Own) { own.Fee = 3*MaxFeePortion - 1 }, "fee"},
+		{"own input listed twice", func(t *testing.T, tx *bisonwire.Tx, own *Own) {
+			own.Inputs = append(own.Inputs, own.Inputs[0])
+		}, "listed twice"},
 		{"output value wraps the sum", func(t *testing.T, tx *bisonwire.Tx, own *Own) {
 			tx.TxOut[0].Value = 1<<63 - 1
 		}, "value"},
@@ -543,5 +547,40 @@ func TestParseBlobRejects(t *testing.T) {
 		if _, _, err := ParseBlob([]byte(in)); !errors.Is(err, ErrInvalidProposal) {
 			t.Fatalf("%q: %v", in, err)
 		}
+	}
+}
+
+// Bytes after the transaction would be dropped silently, so the blob must be
+// refused.
+func TestParseBlobTrailingBytes(t *testing.T) {
+	_, tx := build(t)
+	raw := append(serialize(t, tx), 0)
+	data, _ := json.Marshal(Blob{Tx: hex.EncodeToString(raw)})
+	if _, _, err := ParseBlob(data); !errors.Is(err, ErrInvalidProposal) || !strings.Contains(err.Error(), "trailing") {
+		t.Fatalf("want trailing bytes rejected, got %v", err)
+	}
+}
+
+// The largest fee Build accepts, an even split at the cap, must also pass
+// Review, so tightening either bound cannot drift them apart.
+func TestReviewAcceptsMaxFee(t *testing.T) {
+	owners, p := fixture(t)
+	p.Fee = 3 * MaxFeePortion
+	tx, err := p.Build(RegtestRules)
+	if err != nil {
+		t.Fatal(err)
+	}
+	own := owners[0].own
+	own.Fee = p.Fee
+	rv, err := Review(tx, RegtestRules, own)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rv.FeePortion != MaxFeePortion {
+		t.Fatalf("fee portion %d, want %d", rv.FeePortion, MaxFeePortion)
+	}
+	own.Fee = p.Fee + 1
+	if _, err := Review(tx, RegtestRules, own); err == nil {
+		t.Fatal("a fee one duff over the cap was accepted")
 	}
 }
