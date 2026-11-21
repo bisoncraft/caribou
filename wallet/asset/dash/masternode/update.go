@@ -36,6 +36,15 @@ import (
 //
 // Both carry funding inputs, and an input signature covers the payload, so the
 // payload signatures are in before any input is signed.
+//
+// A registrar update's signatures bind the masternode, the two keys and the
+// funder's input outpoints, and nothing else: no height, no expiry, and no link
+// to the masternode's current keys. Once every owner has signed, the update can
+// be broadcast at any time until the funder's inputs are spent, even after a
+// later update has changed the keys, and then it sets the old ones again. This
+// is Dash Core's payload format. Owners should treat a signed round as live
+// until its funding outpoints are spent, and when one is abandoned the funder
+// should spend them.
 
 const (
 	// MaxUpdateFee is the most an update may leave as fee, in duffs. It is a
@@ -243,7 +252,9 @@ func (m *SharedMN) checkRegistrar(c RegistrarChange) error {
 type RegistrarUpdate struct {
 	// OperatorChanged is whether the update sets a different operator key, which
 	// bans the masternode until the new operator announces its service. A user
-	// must be told before it signs.
+	// must be told before it signs. It compares with the masternode's current
+	// operator key, which is zero once the operator was revoked, so then any
+	// key is a change. The masternode must be filled in from chain state.
 	OperatorChanged bool
 
 	mn *SharedMN
@@ -257,6 +268,9 @@ func NewRegistrarUpdate(m *SharedMN, c RegistrarChange, f Funding, fee int64) (*
 	if err := m.checkRegistrar(c); err != nil {
 		return nil, err
 	}
+	// A zero key means the masternode's state was not filled in, or its operator
+	// was revoked, which this API does not recover from: with it every update
+	// would report an operator change.
 	tx, _, err := fundedTx(f, fee, txTypeProUpSharedReg)
 	if err != nil {
 		return nil, err
@@ -293,6 +307,10 @@ func (u *RegistrarUpdate) sync() error {
 // and nothing else, so it checks that the keys are exactly want, the ones the
 // owner agreed to, and that they are valid. It does not look at the outputs,
 // which only the funder's signature depends on. It does not modify tx.
+//
+// A signature made after this review stays valid until the funder's inputs are
+// spent, whatever the masternode's keys become in the meantime (see the package
+// comment).
 func ReviewRegistrarUpdate(tx *bisonwire.Tx, m *SharedMN, want RegistrarChange) (*RegistrarUpdate, error) {
 	if tx.Type != txTypeProUpSharedReg || tx.MsgTx.Version != txVersion {
 		return nil, badUp("not a registrar update transaction")
@@ -313,6 +331,9 @@ func ReviewRegistrarUpdate(tx *bisonwire.Tx, m *SharedMN, want RegistrarChange) 
 	if err := m.checkRegistrar(want); err != nil {
 		return nil, err
 	}
+	// A zero key means the masternode's state was not filled in, or its operator
+	// was revoked, which this API does not recover from: with it every update
+	// would report an operator change.
 	if len(pu.Sigs) != len(m.Shares) {
 		return nil, badUp("bad-proupsharedreg-sig-count: %d signatures for %d shares", len(pu.Sigs), len(m.Shares))
 	}
@@ -404,14 +425,24 @@ func (u *RegistrarUpdate) Complete() error {
 // SignInputs is run by the funder once every signature is in. The share
 // signatures do not cover the outputs, so before it signs it requires the
 // transaction to spend exactly f's inputs and pay only to f's change script,
-// leaving a fee of at most maxFee. Anyone who passed the transaction round could
-// otherwise have redirected the change.
+// leaving a fee of at most maxFee, with no lock time and final sequences, as it
+// was built. Anyone who passed the transaction round could otherwise have
+// redirected the change or time-locked it, and the share signatures cover
+// neither.
 func (u *RegistrarUpdate) SignInputs(f Funding, maxFee int64, secrets txauthor.SecretsSource) error {
 	if err := u.Complete(); err != nil {
 		return err
 	}
 	if maxFee <= 0 || maxFee > MaxUpdateFee {
 		return badUp("maximum fee %d", maxFee)
+	}
+	if u.tx.LockTime != 0 {
+		return badUp("lock time %d", u.tx.LockTime)
+	}
+	for i, txin := range u.tx.TxIn {
+		if txin.Sequence != finalSequence {
+			return badUp("input %d sequence %#x", i, txin.Sequence)
+		}
 	}
 	if len(u.tx.TxIn) != len(f.Inputs) {
 		return badUp("the transaction spends %d inputs, not the funder's %d", len(u.tx.TxIn), len(f.Inputs))
@@ -445,8 +476,8 @@ func (u *RegistrarUpdate) SignInputs(f Funding, maxFee int64, secrets txauthor.S
 		return badUp("no outputs")
 	}
 	for _, o := range u.tx.TxOut {
-		if !bytes.Equal(o.PkScript, f.ChangeScript) || o.Value <= 0 || o.Value > maxMoney {
-			return badUp("an output does not pay the funder's change script")
+		if !bytes.Equal(o.PkScript, f.ChangeScript) || o.Value < dustLimit || o.Value > maxMoney {
+			return badUp("an output does not pay the funder's change script or is dust")
 		}
 		out += o.Value
 		if out > maxMoney {

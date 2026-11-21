@@ -736,6 +736,24 @@ func TestRegistrarUpdateSignInputs(t *testing.T) {
 			u.tx.AddTxOut(wire.NewTxOut(1, scriptFor(testKey(0x13))))
 			return u
 		}, f, 5000, "change script"},
+		{"a lock time", func() *RegistrarUpdate {
+			// The share signatures cover neither the lock time nor the
+			// sequences, so a relayer can set them and they still verify.
+			u := fresh()
+			u.tx.LockTime = 4_000_000
+			return u
+		}, f, 5000, "lock time"},
+		{"a non-final sequence", func() *RegistrarUpdate {
+			u := fresh()
+			u.tx.TxIn[1].Sequence = 0xffff
+			return u
+		}, f, 5000, "sequence"},
+		{"change split into dust", func() *RegistrarUpdate {
+			u := fresh()
+			u.tx.TxOut[0].Value -= dustLimit - 1
+			u.tx.AddTxOut(wire.NewTxOut(dustLimit-1, f.ChangeScript))
+			return u
+		}, f, 5000, "dust"},
 		{"no outputs", func() *RegistrarUpdate {
 			u := fresh()
 			u.tx.TxOut = nil
