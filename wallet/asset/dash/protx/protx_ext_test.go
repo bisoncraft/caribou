@@ -676,8 +676,10 @@ func TestParseNetInfo(t *testing.T) {
 
 // TestProRegTxV2EvoNodeDashd decodes a version 2 EvoNode registration built
 // and accepted by Dash Core v23.1.4 (protx register_fund_evo), with distinct
-// platform ports so a swapped or big endian read shows, and checks every field
-// against what dashd decoded from the same bytes.
+// platform ports so a swapped or big endian read shows, and checks the EvoNode
+// fields, the inputs hash and the service port against what dashd decoded from
+// the same bytes. The shared version 2 fields are checked by the regular
+// vectors.
 func TestProRegTxV2EvoNodeDashd(t *testing.T) {
 	t.Parallel()
 
