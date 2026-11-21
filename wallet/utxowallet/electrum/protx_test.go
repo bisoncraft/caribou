@@ -259,8 +259,12 @@ func TestProTxInfoNotFound(t *testing.T) {
 	}
 
 	// Another failure with the same code is not a missing registration, nor is
-	// the same words under another code.
-	for _, msg := range []string{"[2]daemon error: DaemonError({'code': -1, 'message': 'busy'})", "[1]x not found"} {
+	// the same words under another code, nor is dashd's own "Method not found".
+	for _, msg := range []string{
+		"[2]daemon error: DaemonError({'code': -1, 'message': 'busy'})",
+		"[1]x not found",
+		"[2]daemon error: DaemonError({'code': -32601, 'message': 'Method not found'})",
+	} {
 		f.mtx.Lock()
 		f.errs["protx.info"] = msg
 		f.mtx.Unlock()

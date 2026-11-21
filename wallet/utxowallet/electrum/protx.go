@@ -33,6 +33,14 @@ var (
 // errCodeMethodNotFound is the JSON-RPC code of an unknown method.
 const errCodeMethodNotFound = -32601
 
+// errCodeDaemonError is ElectrumX's code for any error dashd returned. The
+// daemon's own error is in the message, as a Python dict.
+const errCodeDaemonError = 2
+
+// daemonNotFound is how that message shows dashd's -8 (invalid parameter),
+// which it returns for a proTxHash it does not know.
+const daemonNotFound = "'code': -8"
+
 // ProTxShare is a share of a shared masternode as the server reports it.
 type ProTxShare struct {
 	// Amount is the share's collateral in duffs.
@@ -95,7 +103,8 @@ func (n *Node) ProTxInfo(ctx context.Context, proTxHash chainhash.Hash) (*ProTxI
 	case errors.As(err, &rpcErr) && rpcErr.Code == errCodeMethodNotFound:
 		n.protxUnsupported.Store(true)
 		return nil, ErrProTxUnsupported
-	case errors.As(err, &rpcErr) && rpcErr.Code == 2 && strings.Contains(rpcErr.Message, "not found"):
+	case errors.As(err, &rpcErr) && rpcErr.Code == errCodeDaemonError &&
+		strings.Contains(rpcErr.Message, daemonNotFound) && strings.Contains(rpcErr.Message, "not found"):
 		return nil, ErrProTxNotFound
 	}
 	return nil, err
