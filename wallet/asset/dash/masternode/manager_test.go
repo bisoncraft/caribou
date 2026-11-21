@@ -405,12 +405,12 @@ func TestDiscoverGap(t *testing.T) {
 		derived  int
 		wantNext uint32
 	}{
-		// Misses 0 to 18, then a hit at 19 moves the limit to 40.
-		{"last index in the gap", 19, 0, true, 39, 20},
-		{"first index past the gap", 20, 0, false, 20, 0},
-		// The counter is 30, so indexes below 50 are looked at.
-		{"gap starts at the counter", 45, 30, true, 65, 46},
-		{"past the counter's gap", 50, 30, false, 50, 30},
+		// Misses 0 to gap-2, then a hit at gap-1 moves the limit to twice the gap.
+		{"last index in the gap", ownerGap - 1, 0, true, 2*ownerGap - 1, ownerGap},
+		{"first index past the gap", ownerGap, 0, false, ownerGap, 0},
+		// The counter is 30, so indexes below 30+gap are looked at.
+		{"gap starts at the counter", 30 + ownerGap - 5, 30, true, 30 + 2*ownerGap - 5, 30 + ownerGap - 4},
+		{"past the counter's gap", 30 + ownerGap, 30, false, 30 + ownerGap, 30},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

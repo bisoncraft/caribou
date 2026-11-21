@@ -31,8 +31,12 @@ const (
 	sharedCollateralScripthash = "53736f32ba7e196c3b66cac97b64773e6ab03c42da90e407c23049029385e4bd"
 
 	// ownerGap is how many owner indexes past the last used one discovery
-	// derives before it stops looking for the wallet's registrations.
-	ownerGap = 20
+	// derives before it stops looking for the wallet's registrations. An
+	// index is reserved for every offer, registered or not, so a wallet that
+	// makes this many offers that never register, and then joins a masternode,
+	// does not see it after a restore from seed. It is not found until the
+	// counter is raised past the gap.
+	ownerGap = 100
 )
 
 var (
@@ -54,6 +58,10 @@ var (
 	// ErrNotOurs is returned by Track for a registration that none of the
 	// wallet's owner keys is in.
 	ErrNotOurs = errors.New("not a registration of this wallet")
+	// ErrDeriveOwnerKey is wrapped by the error of a scan that could not derive
+	// an owner key, which is what a scan of a locked wallet gets when a hit
+	// moves its limit past the keys that were cached.
+	ErrDeriveOwnerKey = errors.New("cannot derive owner key")
 	// ErrStale is returned when the server's info is not for the chain tip
 	// the wallet has. The caller may retry.
 	ErrStale = errors.New("server masternode info is not at the tip")
@@ -205,7 +213,7 @@ func ownerKeyID(d KeyDeriver, coinType, idx uint32) ([protx.KeyIDSize]byte, erro
 	var id [protx.KeyIDSize]byte
 	key, err := OwnerKey(d, coinType, idx)
 	if err != nil {
-		return id, fmt.Errorf("derive owner key %d: %w", idx, err)
+		return id, fmt.Errorf("%w %d: %w", ErrDeriveOwnerKey, idx, err)
 	}
 	defer key.Zero()
 	copy(id[:], btcutil.Hash160(key.PubKey().SerializeCompressed()))
@@ -641,7 +649,8 @@ func (m *Manager) PrimeOwnerKeys() error {
 // which goes in a share table. The index is recorded as used before the key is
 // derived (see NewShareOwner), and the ids a scan will need are cached after, so
 // that the next scan does not need the wallet unlocked. If that fails the index
-// stays reserved.
+// stays reserved. A reserved index is used for good, registered or not, and
+// discovery on a restore only looks ownerGap past the last registered one.
 func (m *Manager) ReserveOwner() (uint32, [protx.KeyIDSize]byte, error) {
 	idx, id, err := NewShareOwner(m.store, m.keys, m.coinType)
 	if err != nil {

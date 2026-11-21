@@ -86,7 +86,6 @@ func (dw *dashWallet) Connect(ctx context.Context) (*sync.WaitGroup, error) {
 // trackMasternodes builds the Manager and starts its refresh loop in wg. If it
 // cannot build it, it records why.
 func (dw *dashWallet) trackMasternodes(ctx context.Context, wg *sync.WaitGroup) {
-	dw.mnErr.Store(nil)
 	mgr, err := dw.newManager()
 	if err != nil {
 		err = fmt.Errorf("shared masternodes are unavailable: %w", err)
@@ -153,7 +152,7 @@ func (dw *dashWallet) afterUnlock() {
 		dw.log.Errorf("Caching the masternode owner keys: %v", err)
 		return
 	}
-	dw.onTip(0)
+	dw.requestRefresh()
 }
 
 // adjustBalance adds the staked shares to a balance. They are not outputs of
@@ -174,7 +173,10 @@ func (dw *dashWallet) adjustBalance(bal *asset.Balance) {
 
 // onTip asks for a Refresh. It is called on the wallet's notification loop and
 // never blocks.
-func (dw *dashWallet) onTip(int32) {
+func (dw *dashWallet) onTip(int32) { dw.requestRefresh() }
+
+// requestRefresh asks the refresh loop for a Refresh and never blocks.
+func (dw *dashWallet) requestRefresh() {
 	select {
 	case dw.refresh <- struct{}{}:
 	default:
@@ -184,6 +186,10 @@ func (dw *dashWallet) onTip(int32) {
 // refreshLoop refreshes the masternodes once and then on each request until ctx
 // ends. A change in the staked amount is pushed as a balance. The first
 // Refresh is a full scan, as the store has no cursor yet.
+//
+// Each Refresh reads the whole history of the shared collateral script from the
+// server, which grows with every shared masternode on the network. Refreshing
+// only when that script's status changes is not done yet.
 func (dw *dashWallet) refreshLoop(ctx context.Context, mgr *masternode.Manager) {
 	defer dw.mn.CompareAndSwap(mgr, nil)
 	run := func() {
@@ -191,7 +197,12 @@ func (dw *dashWallet) refreshLoop(ctx context.Context, mgr *masternode.Manager) 
 		// fetch the history of the shared collateral script and fail. Unlock
 		// caches them and asks for a Refresh.
 		if dw.Locked() {
-			if need, err := mgr.NeedsKeys(); err != nil || need {
+			need, err := mgr.NeedsKeys()
+			if err != nil {
+				dw.log.Errorf("Masternode refresh: checking the cached owner keys: %v", err)
+				return
+			}
+			if need {
 				dw.log.Debugf("Masternode refresh waits for the wallet to be unlocked")
 				return
 			}
@@ -204,6 +215,10 @@ func (dw *dashWallet) refreshLoop(ctx context.Context, mgr *masternode.Manager) 
 			return
 		case errors.Is(err, masternode.ErrUnprovable):
 			dw.log.Warnf("Masternode refresh: %v", err)
+		case errors.Is(err, masternode.ErrDeriveOwnerKey) && dw.Locked():
+			// A hit moved the scan past the keys cached for it. Nothing was
+			// saved, and unlocking caches them and asks for a Refresh.
+			dw.log.Debugf("Masternode refresh waits for the wallet to be unlocked: %v", err)
 		default:
 			dw.log.Errorf("Masternode refresh: %v", err)
 		}

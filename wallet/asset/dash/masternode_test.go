@@ -141,6 +141,12 @@ func (c *chainStub) HeaderByHeight(int32) *wire.BlockHeader { return nil }
 func (c *chainStub) GetHistory(context.Context, string) ([]electrum.HistoryEntry, error) {
 	return nil, errors.New("no history")
 }
+func (c *chainStub) GetTransactionVerbose(context.Context, string) (*electrum.VerboseTx, error) {
+	return nil, errors.New("none")
+}
+func (c *chainStub) HeaderByHash(*chainhash.Hash) (int32, *wire.BlockHeader, bool) {
+	return 0, nil, false
+}
 func (c *chainStub) GetRawTransaction(context.Context, string) (string, error) {
 	return "", errors.New("none")
 }

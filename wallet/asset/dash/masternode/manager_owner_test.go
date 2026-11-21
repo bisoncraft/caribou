@@ -65,6 +65,36 @@ func TestScanWhileLockedWithoutPriming(t *testing.T) {
 	}
 }
 
+// A hit near the top of the cached window moves the scan's limit past the keys
+// that NeedsKeys says are cached, so a locked scan can still need one. It must
+// fail with an error that says so, for a caller to tell it from a real failure.
+func TestScanWhileLockedPastTheCachedWindow(t *testing.T) {
+	e := newEnv(t)
+	e.own(map[uint32][20]byte{ownerGap - 1: e.idA}, 0)
+	if err := e.manager().PrimeOwnerKeys(); err != nil {
+		t.Fatal(err)
+	}
+	m, _ := e.lockedManager()
+	if need, err := m.NeedsKeys(); err != nil || need {
+		t.Fatalf("needs keys: %v %v", need, err)
+	}
+	err := m.Discover(t.Context())
+	if !errors.Is(err, ErrDeriveOwnerKey) {
+		t.Fatalf("got %v", err)
+	}
+	if e.snapshot().Cursor != (Cursor{}) {
+		t.Fatal("a failed scan moved the cursor")
+	}
+	// Once unlocked, the same scan finds it.
+	um := e.manager()
+	if err := um.Discover(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if um.StakedAmount() != e.a.Shares[0].Amount {
+		t.Fatal("A not found once unlocked")
+	}
+}
+
 func TestPrimeOwnerKeysCachesTheWindow(t *testing.T) {
 	e := newEnv(t)
 	m := e.manager()
