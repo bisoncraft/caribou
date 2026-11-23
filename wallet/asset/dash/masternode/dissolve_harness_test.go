@@ -256,3 +256,81 @@ func TestDissolutionAcceptedByDashCore(t *testing.T) {
 		t.Fatalf("Core refused the standby at the first valid height: %s", why)
 	}
 }
+
+// TestDissolutionPayeeEnforcedByDashCore checks that Dash Core refuses a
+// unilateral dissolution, signed by the actor alone, whose outputs do not pay a
+// non-actor share's refund script. A signature covers the outputs, so the
+// actor chooses them, and that rule is what makes a dissolution of a share the
+// wallet owns show up in the history of its refund script. The control is the
+// same dissolution unchanged, which Core accepts, so the refusals below are
+// down to the change alone.
+//
+// It registers a masternode as the dissolution test does, and passes the
+// dissolutions to testmempoolaccept only.
+func TestDissolutionPayeeEnforcedByDashCore(t *testing.T) {
+	m, keys := registerHarnessMN(t)
+	r, err := rpc(t, "getblockcount")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var height int32
+	if err := json.Unmarshal(r, &height); err != nil {
+		t.Fatal(err)
+	}
+	next := height + 1
+	if next-m.RegisteredHeight >= int32(m.EarlyPeriodBlocks) {
+		t.Fatalf("the early period is already over at %d", next)
+	}
+
+	const actor, fee = 1, 100_000
+	// built signs, as the actor, the dissolution with its outputs changed by
+	// mutate, and returns it serialized.
+	built := func(mutate func(d *Dissolution)) []byte {
+		t.Helper()
+		d, err := NewDissolution(m, DissolveParams{Actor: actor, Penalty: m.RequiredPenalty(next, false), Fee: fee})
+		if err != nil {
+			t.Fatal(err)
+		}
+		mutate(d)
+		s, err := d.Sign(keys[actor], actor)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := d.AddSigs([]ShareSig{s}); err != nil {
+			t.Fatal(err)
+		}
+		raw, err := d.Raw()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return raw
+	}
+
+	// Outputs are the non-actor shares' in share order, then the actor's.
+	other := bytes.Clone(m.Shares[0].RefundScript)
+	other[5] ^= 1
+	tests := []struct {
+		name   string
+		mutate func(d *Dissolution)
+		reason string // empty for accepted
+	}{
+		{"control: unchanged", func(d *Dissolution) {}, ""},
+		{"a non-actor payout to another script", func(d *Dissolution) { d.tx.TxOut[0].PkScript = other }, "bad-prodis-payee"},
+		{"a non-actor payout to the actor's script", func(d *Dissolution) { d.tx.TxOut[0].PkScript = m.Shares[actor].RefundScript }, "bad-prodis-payee"},
+		{"the non-actor payout left out", func(d *Dissolution) { d.tx.TxOut = d.tx.TxOut[1:] }, "bad-prodis-payee"},
+		{"the actor's payout to another script", func(d *Dissolution) { d.tx.TxOut[1].PkScript = other }, "bad-prodis-payee"},
+	}
+	for _, tc := range tests {
+		ok, why := accepted(t, built(tc.mutate))
+		t.Logf("%-45s accepted=%v reason=%q", tc.name, ok, why)
+		if tc.reason == "" {
+			if !ok {
+				t.Errorf("%s: Core refused it: %s", tc.name, why)
+			}
+			continue
+		}
+		if ok || why != tc.reason {
+			t.Errorf("%s: accepted=%v reason %q, want refused with %q", tc.name, ok, why, tc.reason)
+		}
+	}
+}
