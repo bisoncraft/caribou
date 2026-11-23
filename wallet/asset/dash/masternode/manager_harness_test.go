@@ -22,7 +22,9 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -82,6 +84,26 @@ func (c nodeChain) HeaderByHeight(h int32) *wire.BlockHeader {
 
 func (c nodeChain) GetHistory(ctx context.Context, sh string) ([]electrum.HistoryEntry, error) {
 	return c.node.GetHistory(ctx, sh)
+}
+
+func (c nodeChain) GetTransactionVerbose(ctx context.Context, id string) (*electrum.VerboseTx, error) {
+	return c.node.GetTransactionVerbose(ctx, id)
+}
+
+// HeaderByHash asks dashd for the height, as the node has no header store.
+func (c nodeChain) HeaderByHash(hash *chainhash.Hash) (int32, *wire.BlockHeader, bool) {
+	r, err := rpc(c.t, "getblockheader", hash.String())
+	if err != nil {
+		return 0, nil, false
+	}
+	var h struct {
+		Height int32 `json:"height"`
+	}
+	if json.Unmarshal(r, &h) != nil {
+		return 0, nil, false
+	}
+	hdr := c.HeaderByHeight(h.Height)
+	return h.Height, hdr, hdr != nil
 }
 
 func (c nodeChain) GetRawTransaction(ctx context.Context, id string) (string, error) {
@@ -233,5 +255,123 @@ func TestLiveManager(t *testing.T) {
 	})
 	if got := m.StakedAmount(); got != 0 {
 		t.Fatalf("staked %d after the dissolution", got)
+	}
+}
+
+// refusingChain is a chain whose server will not return the history of the
+// shared collateral script, as one does once it is past its limit.
+type refusingChain struct{ nodeChain }
+
+func (c refusingChain) GetHistory(ctx context.Context, sh string) ([]electrum.HistoryEntry, error) {
+	if sh == sharedCollateralScripthash {
+		return nil, errors.New("history too large")
+	}
+	return c.nodeChain.GetHistory(ctx, sh)
+}
+
+// TestLiveTrack registers a masternode, tracks it by its id and has it
+// dissolved, against a server that will not return the history of the shared
+// collateral script: the registration is proven through a merkle proof, and the
+// dissolution is found in the history of the share's refund script.
+func TestLiveTrack(t *testing.T) {
+	node, err := electrum.NewNode(t.Context(), &electrum.ServerAddr{Proto: "ssl", Addr: "127.0.0.1:55021", SkipVerify: true}, "", "", bisonwire.ChainDASH)
+	if err != nil {
+		t.Skipf("the Dash harness electrumx is not reachable: %v", err)
+	}
+	defer node.Close()
+	chain := refusingChain{nodeChain{t: t, node: node}}
+
+	seed := make([]byte, 32)
+	if _, err := rand.Read(seed); err != nil {
+		t.Fatal(err)
+	}
+	master, err := hdkeychain.NewMaster(seed, &chaincfg.MainNetParams)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keys := rootDeriver{master}
+	k0, err := OwnerKey(keys, 1, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	k1, err := OwnerKey(keys, 1, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mn, ownerKeys := registerHarnessMN(t, k0, k1)
+
+	st, db, _ := newTestStore(t)
+	defer db.Close()
+	m, err := NewManager(chain, st, keys, 1, regtestNet)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Discover(t.Context()); !errors.Is(err, ErrSharedHistory) {
+		t.Fatalf("discover against a server that refuses: %v", err)
+	}
+
+	// The server may not have the registration in its index yet.
+	waitFor := func(what string, f func() error) {
+		t.Helper()
+		var err error
+		for i := 0; i < 50; i++ {
+			if err = f(); err == nil {
+				return
+			}
+			time.Sleep(200 * time.Millisecond)
+		}
+		t.Fatalf("timed out waiting for %s: %v", what, err)
+	}
+	waitFor("the registration", func() error {
+		if err := m.TrackTxID(t.Context(), mn.ProTxHash); err != nil {
+			return err
+		}
+		if err := m.Refresh(t.Context()); err != nil {
+			return err
+		}
+		if m.StakedAmount() != 1000e8 {
+			return fmt.Errorf("staked %d", m.StakedAmount())
+		}
+		return nil
+	})
+	if snap, err := st.Load(); err != nil || len(snap.Tracked) != 0 || snap.NextOwner < 2 {
+		t.Fatalf("%v, tracked %d, next owner %d", err, len(snap.Tracked), snap.NextOwner)
+	}
+
+	// A unanimous dissolution pays every share's refund script.
+	d, err := NewDissolution(mn, DissolveParams{Actor: 0, Unanimous: true, Fee: 100_000})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sigs []ShareSig
+	for i := range ownerKeys {
+		s, err := d.Sign(ownerKeys[i], i)
+		if err != nil {
+			t.Fatal(err)
+		}
+		sigs = append(sigs, s)
+	}
+	if err := d.AddSigs(sigs); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := d.Raw()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := rpc(t, "sendrawtransaction", hex.EncodeToString(raw)); err != nil {
+		t.Fatal(err)
+	}
+	mine(t, 1)
+	waitFor("the dissolution", func() error {
+		if err := m.Refresh(t.Context()); err != nil {
+			return err
+		}
+		if _, err := m.SharedMN(t.Context(), mn.ProTxHash, false); !errors.Is(err, ErrDissolved) {
+			return fmt.Errorf("not dissolved yet: %v", err)
+		}
+		return nil
+	})
+	if m.StakedAmount() != 0 {
+		t.Fatalf("staked %d after the dissolution", m.StakedAmount())
 	}
 }

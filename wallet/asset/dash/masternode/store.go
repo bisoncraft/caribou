@@ -41,8 +41,8 @@ const storeVersion = 1
 const legacyVersion = 1
 
 // Store keeps what a shared masternode wallet cannot recompute: the owner
-// index counter, the owner key ids it has derived, how far discovery has
-// scanned, each registration found, as its raw transaction, and the wallet's
+// index counter, the owner key ids it has derived, how far Discover has
+// read, each registration found, as its raw transaction, and the wallet's
 // own transactions it is waiting to prove. Everything else is rebuilt from
 // these and the chain.
 type Store struct {
@@ -107,10 +107,10 @@ func NewStore(db walletdb.DB) (*Store, error) {
 	return &Store{db: db}, nil
 }
 
-// Cursor is how far discovery has scanned: a block rescanDepth below the tip it
-// scanned to, so that a reorg of that depth leaves it in the chain. Hash is the
-// double sha256 of the header at Height, a fingerprint that is only compared
-// with itself and need not be the chain's block id.
+// Cursor is how far Discover has read the history of the shared collateral
+// script: the tip it read to. It is empty until a Discover has finished. Hash
+// is the double sha256 of the header at Height, a fingerprint that is only
+// compared with itself and need not be the chain's block id.
 type Cursor struct {
 	Height int32
 	Hash   chainhash.Hash
@@ -181,7 +181,7 @@ type Update struct {
 	// registration a reorg dropped can be put back to be proven again.
 	Track   [][]byte
 	Untrack []chainhash.Hash
-	// Cursor, if not nil, replaces the scan cursor.
+	// Cursor, if not nil, replaces the discovery cursor.
 	Cursor *Cursor
 }
 

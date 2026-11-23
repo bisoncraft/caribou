@@ -40,13 +40,26 @@ type fakeChain struct {
 	raws    map[string]string
 	proofs  map[string]*electrum.MerkleProof
 	history []electrum.HistoryEntry
-	info    *electrum.ProTxInfo
-	infoErr error
+	// blocks are the hashes of the blocks the server says transactions are in,
+	// by transaction id, and refund is the history of other scripts, by
+	// scripthash.
+	blocks map[string]string
+	refund map[string][]electrum.HistoryEntry
+	// sharedErr is returned for the history of the shared collateral script.
+	sharedErr error
+	// verboseErr is returned for a verbose transaction.
+	verboseErr error
+	info       *electrum.ProTxInfo
+	infoErr    error
 
 	rawCalls    map[string]int
 	merkleCalls map[string]int
-	histCalls   int
-	infoCalls   int
+	// histCalls counts the reads of the shared script's history and histTotal
+	// the reads of any.
+	histCalls    int
+	histTotal    int
+	verboseCalls int
+	infoCalls    int
 }
 
 func (f *fakeChain) Tip() int32 {
@@ -70,11 +83,36 @@ func (f *fakeChain) HeaderByHeight(h int32) *wire.BlockHeader {
 func (f *fakeChain) GetHistory(_ context.Context, sh string) ([]electrum.HistoryEntry, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.histCalls++
+	f.histTotal++
 	if sh != sharedCollateralScripthash {
-		return nil, errors.New("wrong scripthash")
+		return slices.Clone(f.refund[sh]), nil
+	}
+	f.histCalls++
+	if f.sharedErr != nil {
+		return nil, f.sharedErr
 	}
 	return slices.Clone(f.history), nil
+}
+
+func (f *fakeChain) GetTransactionVerbose(_ context.Context, txid string) (*electrum.VerboseTx, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.verboseCalls++
+	if f.verboseErr != nil {
+		return nil, f.verboseErr
+	}
+	return &electrum.VerboseTx{TxID: txid, BlockHash: f.blocks[txid]}, nil
+}
+
+func (f *fakeChain) HeaderByHash(hash *chainhash.Hash) (int32, *wire.BlockHeader, bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for h, hdr := range f.headers {
+		if hdr.BlockHash() == *hash {
+			return h, hdr, true
+		}
+	}
+	return 0, nil, false
 }
 
 func (f *fakeChain) GetRawTransaction(_ context.Context, txid string) (string, error) {
@@ -182,6 +220,8 @@ func newEnv(t *testing.T) *env {
 		tip:         tipHeight,
 		headers:     map[int32]*wire.BlockHeader{},
 		raws:        map[string]string{},
+		blocks:      map[string]string{},
+		refund:      map[string][]electrum.HistoryEntry{},
 		proofs:      map[string]*electrum.MerkleProof{},
 		rawCalls:    map[string]int{},
 		merkleCalls: map[string]int{},
@@ -189,8 +229,6 @@ func newEnv(t *testing.T) *env {
 	}
 	e.chain = f
 	f.headers[tipHeight] = synthHeader(chainhash.Hash{}, tipHeight)
-	// The scan cursor is saved at this height.
-	f.headers[tipHeight-rescanDepth] = synthHeader(chainhash.Hash{}, tipHeight-rescanDepth)
 
 	var real struct {
 		BlockHeight int32    `json:"block_height"`
@@ -211,6 +249,7 @@ func newEnv(t *testing.T) *env {
 	idA := e.a.ProTxHash.String()
 	f.proofs[idA] = &electrum.MerkleProof{BlockHeight: real.BlockHeight, Merkle: real.Merkle, Pos: real.Pos}
 	f.raws[idA] = e.rawHex(e.txA)
+	f.blocks[idA] = hdr.BlockHash().String()
 	f.history = append(f.history, electrum.HistoryEntry{Height: heightA, TxHash: idA})
 
 	e.addSynth(e.txB, heightB)
@@ -229,6 +268,7 @@ func (e *env) addSynth(tx *bisonwire.Tx, height int32) {
 	s := id.String()
 	e.chain.headers[height] = synthHeader(id, height)
 	e.chain.proofs[s] = &electrum.MerkleProof{BlockHeight: height}
+	e.chain.blocks[s] = e.chain.headers[height].BlockHash().String()
 	e.chain.raws[s] = e.rawHex(tx)
 	e.chain.history = append(e.chain.history, electrum.HistoryEntry{Height: height, TxHash: s})
 }
@@ -236,6 +276,12 @@ func (e *env) addSynth(tx *bisonwire.Tx, height int32) {
 // setHistory replaces the history with entries of the given transactions.
 func (e *env) setHistory(es ...electrum.HistoryEntry) {
 	e.chain.history = es
+}
+
+// refundHistory sets what the server lists for the refund script of share i of
+// mn.
+func (e *env) refundHistory(mn *SharedMN, i int, es ...electrum.HistoryEntry) {
+	e.chain.refund[scriptHash(mn.Shares[i].RefundScript)] = es
 }
 
 // own caches the key id at index idx, which is what an earlier derivation or
@@ -302,7 +348,7 @@ func TestDiscover(t *testing.T) {
 		t.Fatalf("unknown: %v", err)
 	}
 	snap := e.snapshot()
-	if snap.Cursor.Height != tipHeight-rescanDepth || snap.Cursor.Hash != e.chain.headers[tipHeight-rescanDepth].BlockHash() {
+	if snap.Cursor.Height != tipHeight || snap.Cursor.Hash != e.chain.headers[tipHeight].BlockHash() {
 		t.Fatalf("cursor %+v", snap.Cursor)
 	}
 	// Registering B at index 5 used the indexes below it.
@@ -466,231 +512,6 @@ func TestDiscoverIgnoresOthers(t *testing.T) {
 	}
 }
 
-func TestRefreshIsIncremental(t *testing.T) {
-	e := newEnv(t)
-	e.own(map[uint32][20]byte{1: e.idA, 2: e.idB}, 0)
-	e.setHistory(entry(heightA, e.a.ProTxHash))
-	m := e.manager()
-	if err := m.Refresh(t.Context()); err != nil { // no cursor: a full scan
-		t.Fatal(err)
-	}
-	if m.StakedAmount() != e.a.Shares[0].Amount {
-		t.Fatal("A not found")
-	}
-
-	// B is mined above the cursor's re-read window, then D dissolves it.
-	e.addSynth(e.txB, 905)
-	e.chain.history = slices.DeleteFunc(e.chain.history, func(h electrum.HistoryEntry) bool { return h.Height != 905 && h.TxHash != e.a.ProTxHash.String() })
-	if err := m.Refresh(t.Context()); err != nil {
-		t.Fatal(err)
-	}
-	if got := m.StakedAmount(); got != e.a.Shares[0].Amount+e.b.Shares[0].Amount {
-		t.Fatalf("staked %d", got)
-	}
-	if e.chain.rawCalls[e.a.ProTxHash.String()] != 1 {
-		t.Fatalf("A was read %d times", e.chain.rawCalls[e.a.ProTxHash.String()])
-	}
-	e.addSynth(e.txD, 908)
-	e.chain.history = slices.DeleteFunc(e.chain.history, func(h electrum.HistoryEntry) bool { return h.Height == heightD })
-	if err := m.Refresh(t.Context()); err != nil {
-		t.Fatal(err)
-	}
-	if got := m.StakedAmount(); got != e.a.Shares[0].Amount {
-		t.Fatalf("staked after dissolution %d", got)
-	}
-	if e.chain.rawCalls[e.b.ProTxHash.String()] != 1 {
-		t.Fatalf("B was read %d times", e.chain.rawCalls[e.b.ProTxHash.String()])
-	}
-	if e.chain.rawCalls[e.hashD.String()] != 1 {
-		t.Fatalf("D was read %d times", e.chain.rawCalls[e.hashD.String()])
-	}
-}
-
-// An incremental scan re-reads a few blocks below the cursor, because the
-// history of a server that has just caught up can lag its headers.
-func TestRefreshRescanDepth(t *testing.T) {
-	for _, c := range []struct {
-		height int32
-		found  bool
-	}{
-		{tipHeight - rescanDepth + 1, true},
-		{tipHeight - rescanDepth, false},
-	} {
-		e := newEnv(t)
-		e.own(map[uint32][20]byte{1: e.idA, 2: e.idB}, 0)
-		e.setHistory(entry(heightA, e.a.ProTxHash))
-		m := e.manager()
-		if err := m.Refresh(t.Context()); err != nil {
-			t.Fatal(err)
-		}
-		// addSynth replaces the header at its height, and at the cursor's
-		// height that would be a reorg, not a late entry.
-		cursorHdr := e.chain.headers[tipHeight-rescanDepth]
-		e.addSynth(e.txB, c.height)
-		synth := e.chain.headers[c.height]
-		e.chain.headers[tipHeight-rescanDepth] = cursorHdr
-		e.chain.history = slices.DeleteFunc(e.chain.history, func(h electrum.HistoryEntry) bool { return h.Height == heightB || h.Height == heightD })
-		if err := m.Refresh(t.Context()); err != nil {
-			t.Fatal(err)
-		}
-		if got := m.StakedAmount() > e.a.Shares[0].Amount; got != c.found {
-			t.Fatalf("height %d: found %v", c.height, got)
-		}
-		// A full scan finds it either way.
-		e.chain.headers[c.height] = synth
-		if err := m.Discover(t.Context()); err != nil {
-			t.Fatal(err)
-		}
-		if m.StakedAmount() <= e.a.Shares[0].Amount {
-			t.Fatalf("height %d: discover missed it", c.height)
-		}
-	}
-}
-
-// Without a reorg an incremental scan trusts what it has: a registration the
-// server stops listing stays.
-func TestRefreshWithoutReorgKeeps(t *testing.T) {
-	e := newEnv(t)
-	e.own(map[uint32][20]byte{1: e.idA}, 0)
-	e.setHistory(entry(heightA, e.a.ProTxHash))
-	m := e.manager()
-	if err := m.Discover(t.Context()); err != nil {
-		t.Fatal(err)
-	}
-	e.setHistory()
-	if err := m.Refresh(t.Context()); err != nil {
-		t.Fatal(err)
-	}
-	if m.StakedAmount() == 0 {
-		t.Fatal("dropped a registration with no reorg")
-	}
-}
-
-func TestRefreshReorg(t *testing.T) {
-	setup := func(t *testing.T) (*env, *Manager) {
-		e := newEnv(t)
-		e.own(map[uint32][20]byte{1: e.idA, 2: e.idB}, 0)
-		m := e.manager()
-		if err := m.Discover(t.Context()); err != nil {
-			t.Fatal(err)
-		}
-		if m.StakedAmount() != e.a.Shares[0].Amount {
-			t.Fatal("setup")
-		}
-		// The block at the cursor changes.
-		e.chain.headers[tipHeight-rescanDepth] = synthHeader(chainhash.Hash{7}, tipHeight-rescanDepth)
-		return e, m
-	}
-	// A reorg that does not reach a block leaves what it proved, whatever the
-	// server's history says now: the server must not be able to make the wallet
-	// forget a masternode or un-dissolve one.
-	t.Run("history omits what the reorg did not touch", func(t *testing.T) {
-		e, m := setup(t)
-		e.setHistory()
-		if err := m.Refresh(t.Context()); err != nil {
-			t.Fatal(err)
-		}
-		if err := m.Discover(t.Context()); err != nil {
-			t.Fatal(err)
-		}
-		for _, mm := range []*Manager{m, e.manager()} {
-			if got := mm.StakedAmount(); got != e.a.Shares[0].Amount {
-				t.Fatalf("staked %d", got)
-			}
-			if _, err := mm.SharedMN(t.Context(), e.b.ProTxHash, false); !errors.Is(err, ErrDissolved) {
-				t.Fatalf("B: %v", err)
-			}
-		}
-	})
-	t.Run("registration moved", func(t *testing.T) {
-		e, m := setup(t)
-		id := e.a.ProTxHash.String()
-		e.chain.headers[heightA] = synthHeader(chainhash.Hash{8}, heightA)
-		e.chain.headers[800] = synthHeader(e.a.ProTxHash, 800)
-		e.chain.proofs[id] = &electrum.MerkleProof{BlockHeight: 800}
-		e.setHistory(entry(800, e.a.ProTxHash), entry(heightB, e.b.ProTxHash), entry(heightD, e.hashD))
-		if err := m.Refresh(t.Context()); err != nil {
-			t.Fatal(err)
-		}
-		for _, mm := range []*Manager{m, e.manager()} {
-			c, err := mm.SharedMN(t.Context(), e.a.ProTxHash, false)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if c.RegisteredHeight != 800 {
-				t.Fatalf("height %d", c.RegisteredHeight)
-			}
-		}
-	})
-	t.Run("registration's block gone", func(t *testing.T) {
-		e, m := setup(t)
-		e.chain.headers[heightA] = synthHeader(chainhash.Hash{8}, heightA)
-		e.setHistory(entry(heightB, e.b.ProTxHash), entry(heightD, e.hashD))
-		if err := m.Refresh(t.Context()); err != nil {
-			t.Fatal(err)
-		}
-		for _, mm := range []*Manager{m, e.manager()} {
-			if _, err := mm.SharedMN(t.Context(), e.a.ProTxHash, false); !errors.Is(err, ErrUnknownMN) {
-				t.Fatalf("A: %v", err)
-			}
-			if mm.StakedAmount() != 0 {
-				t.Fatal("staked")
-			}
-		}
-		// The counter does not go back.
-		if e.snapshot().NextOwner != 3 {
-			t.Fatalf("next owner %d", e.snapshot().NextOwner)
-		}
-	})
-	t.Run("dissolution's block gone", func(t *testing.T) {
-		e, m := setup(t)
-		e.chain.headers[heightD] = synthHeader(chainhash.Hash{8}, heightD)
-		e.setHistory(entry(heightA, e.a.ProTxHash), entry(heightB, e.b.ProTxHash))
-		if err := m.Refresh(t.Context()); err != nil {
-			t.Fatal(err)
-		}
-		want := e.a.Shares[0].Amount + e.b.Shares[0].Amount
-		for _, mm := range []*Manager{m, e.manager()} {
-			if got := mm.StakedAmount(); got != want {
-				t.Fatalf("staked %d, want %d", got, want)
-			}
-		}
-		if len(e.snapshot().Dissolutions) != 0 {
-			t.Fatal("dissolution kept")
-		}
-	})
-	t.Run("registration's block gone takes its dissolution", func(t *testing.T) {
-		e, m := setup(t)
-		e.chain.headers[heightB] = synthHeader(chainhash.Hash{8}, heightB)
-		e.setHistory(entry(heightA, e.a.ProTxHash), entry(heightD, e.hashD))
-		if err := m.Refresh(t.Context()); err != nil {
-			t.Fatal(err)
-		}
-		snap := e.snapshot()
-		if len(snap.Registrations) != 1 || len(snap.Dissolutions) != 0 {
-			t.Fatalf("%d registrations, %d dissolutions", len(snap.Registrations), len(snap.Dissolutions))
-		}
-	})
-	t.Run("blocks above the new tip are gone", func(t *testing.T) {
-		e, m := setup(t)
-		delete(e.chain.headers, tipHeight)
-		delete(e.chain.headers, heightA)
-		e.chain.tip = 795
-		e.chain.headers[795] = synthHeader(chainhash.Hash{}, 795)
-		e.setHistory(entry(heightB, e.b.ProTxHash), entry(heightD, e.hashD))
-		if err := m.Refresh(t.Context()); err != nil {
-			t.Fatal(err)
-		}
-		if m.StakedAmount() != 0 {
-			t.Fatal("kept A above the tip")
-		}
-		if c := e.snapshot().Cursor; c.Height != 795 {
-			t.Fatalf("cursor %+v", c)
-		}
-	})
-}
-
-// A spend in the mempool is not mined, so it does not dissolve.
 func TestMempoolSpendDoesNotDissolve(t *testing.T) {
 	for _, h := range []int32{0, -1} {
 		e := newEnv(t)
@@ -778,25 +599,6 @@ func TestDiscoverSkipsUnprovableSpend(t *testing.T) {
 }
 
 // What was proven below the chain's headers stays: no reorg reaches it.
-func TestRefreshKeepsProofBelowStart(t *testing.T) {
-	e := newEnv(t)
-	e.own(map[uint32][20]byte{1: e.idA}, 0)
-	m := e.manager()
-	if err := m.Discover(t.Context()); err != nil {
-		t.Fatal(err)
-	}
-	e.chain.start = heightA + 1
-	delete(e.chain.headers, heightA)
-	e.setHistory()
-	e.chain.headers[tipHeight] = synthHeader(chainhash.Hash{7}, tipHeight)
-	if err := m.Refresh(t.Context()); err != nil {
-		t.Fatal(err)
-	}
-	if m.StakedAmount() != e.a.Shares[0].Amount {
-		t.Fatal("dropped a registration below the start")
-	}
-}
-
 func TestEntriesAboveTipAreLeft(t *testing.T) {
 	e := newEnv(t)
 	e.own(map[uint32][20]byte{1: e.idA}, 0)
@@ -881,13 +683,15 @@ func TestSharedMN(t *testing.T) {
 	t.Run("mismatch refreshes once", func(t *testing.T) {
 		e.chain.info = loadInfo(t, "protx_info_shared.json")
 		e.chain.info.State.EarlyPenalty++
-		e.chain.infoCalls, e.chain.histCalls = 0, 0
+		e.chain.infoCalls, e.chain.histCalls, e.chain.histTotal = 0, 0, 0
 		_, err := m.SharedMN(ctx, e.a.ProTxHash, true)
 		if !errors.Is(err, ErrInfoMismatch) {
 			t.Fatalf("%v", err)
 		}
-		if e.chain.infoCalls != 2 || e.chain.histCalls != 1 {
-			t.Fatalf("%d info calls, %d history calls", e.chain.infoCalls, e.chain.histCalls)
+		// One Refresh reads the history of A's one owned refund script, and
+		// never the shared script's.
+		if e.chain.infoCalls != 2 || e.chain.histTotal != 1 || e.chain.histCalls != 0 {
+			t.Fatalf("%d info calls, %d history calls, %d of the shared script", e.chain.infoCalls, e.chain.histTotal, e.chain.histCalls)
 		}
 	})
 
@@ -895,13 +699,12 @@ func TestSharedMN(t *testing.T) {
 		e.chain.info = loadInfo(t, "protx_info_shared.json")
 		e.chain.info.State.RegisteredHeight = 800
 		e.chain.info.Confirmations = tipHeight - 800 + 1
-		// The registration moves to 800, and the cursor's block changes.
+		// The registration moves to 800.
 		id := e.a.ProTxHash.String()
 		e.chain.headers[heightA] = synthHeader(chainhash.Hash{8}, heightA)
 		e.chain.headers[800] = synthHeader(e.a.ProTxHash, 800)
 		e.chain.proofs[id] = &electrum.MerkleProof{BlockHeight: 800}
-		e.setHistory(entry(800, e.a.ProTxHash))
-		e.chain.headers[tipHeight-rescanDepth] = synthHeader(chainhash.Hash{3}, tipHeight-rescanDepth)
+		e.chain.blocks[id] = e.chain.headers[800].BlockHash().String()
 		c, err := m.SharedMN(ctx, e.a.ProTxHash, true)
 		if err != nil {
 			t.Fatal(err)
@@ -943,58 +746,6 @@ func TestManagerConcurrent(t *testing.T) {
 		}()
 	}
 	wg.Wait()
-}
-
-// An orphaned tip is routine and must not make a Refresh read every shared
-// registration on the network again: only the window below the cursor is.
-func TestRefreshAfterOrphanedTipIsIncremental(t *testing.T) {
-	e := newEnv(t)
-	e.own(map[uint32][20]byte{1: e.idA}, 0) // B is another wallet's
-	e.setHistory(entry(heightA, e.a.ProTxHash), entry(heightB, e.b.ProTxHash))
-	m := e.manager()
-	if err := m.Refresh(t.Context()); err != nil {
-		t.Fatal(err)
-	}
-	other := e.b.ProTxHash.String()
-	if e.chain.rawCalls[other] != 1 {
-		t.Fatalf("another wallet's registration was read %d times", e.chain.rawCalls[other])
-	}
-	e.chain.headers[tipHeight] = synthHeader(chainhash.Hash{7}, tipHeight)
-	if err := m.Refresh(t.Context()); err != nil {
-		t.Fatal(err)
-	}
-	if e.chain.rawCalls[other] != 1 {
-		t.Fatalf("an orphaned tip read it again: %d reads", e.chain.rawCalls[other])
-	}
-	if m.StakedAmount() != e.a.Shares[0].Amount {
-		t.Fatal("A lost")
-	}
-}
-
-// A reorg deeper than the window moves the cursor's block, and then everything
-// is read again: the new chain can put a spend far below the window, where an
-// incremental scan would never look.
-func TestRefreshAfterDeepReorgReadsEverything(t *testing.T) {
-	e := newEnv(t)
-	e.own(map[uint32][20]byte{2: e.idB}, 0)
-	e.setHistory(entry(heightB, e.b.ProTxHash))
-	m := e.manager()
-	if err := m.Discover(t.Context()); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := m.SharedMN(t.Context(), e.b.ProTxHash, false); err != nil {
-		t.Fatalf("B: %v", err)
-	}
-	// The new chain has B's spend at 850, far below the window, and the cursor's
-	// block is not the one it saved.
-	e.addSynth(e.txD, 850)
-	e.chain.headers[tipHeight-rescanDepth] = synthHeader(chainhash.Hash{7}, tipHeight-rescanDepth)
-	if err := m.Refresh(t.Context()); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := m.SharedMN(t.Context(), e.b.ProTxHash, false); !errors.Is(err, ErrDissolved) {
-		t.Fatalf("B: %v", err)
-	}
 }
 
 // A transaction that spends a collateral dissolves it whatever its type, so a

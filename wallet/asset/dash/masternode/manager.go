@@ -30,14 +30,6 @@ const (
 	// ownerGap is how many owner indexes past the last used one discovery
 	// derives before it stops looking for the wallet's registrations.
 	ownerGap = 20
-
-	// rescanDepth is how far below the tip a scan saves its cursor, which is
-	// also how many blocks an incremental scan reads again, in case the
-	// server's history lags its headers. A reorg this deep leaves the cursor's
-	// block in the chain, so the scan stays incremental. An entry the server
-	// lists more than this many blocks late is not seen by Refresh, only by
-	// Discover, so a caller should run Discover on startup and now and then.
-	rescanDepth = 6
 )
 
 var (
@@ -50,6 +42,15 @@ var (
 	// transaction of the wallet's that is below the headers the chain holds, so
 	// it cannot be proven. What the scan proved is saved.
 	ErrUnprovable = errors.New("transaction below the chain's headers cannot be proven")
+	// ErrSharedHistory is returned by Discover when the server will not give
+	// the history of the shared collateral script, which every shared
+	// masternode on the network adds to and a server refuses past its limit.
+	// Nothing else reads it: a registration can still be added with Track or
+	// TrackTxID.
+	ErrSharedHistory = errors.New("the server does not return the history of the shared collateral script")
+	// ErrNotOurs is returned by Track for a registration that none of the
+	// wallet's owner keys is in.
+	ErrNotOurs = errors.New("not a registration of this wallet")
 	// ErrStale is returned when the server's info is not for the chain tip
 	// the wallet has. The caller may retry.
 	ErrStale = errors.New("server masternode info is not at the tip")
@@ -64,6 +65,11 @@ type Chain interface {
 	// HeaderByHeight returns nil if the header is not known.
 	HeaderByHeight(height int32) *wire.BlockHeader
 	GetHistory(ctx context.Context, scripthash string) ([]electrum.HistoryEntry, error)
+	// GetTransactionVerbose returns the server's view of a transaction, with
+	// the hash of its block if it is mined. Not every server has it.
+	GetTransactionVerbose(ctx context.Context, txid string) (*electrum.VerboseTx, error)
+	// HeaderByHash returns the height and header of a block the chain holds.
+	HeaderByHash(hash *chainhash.Hash) (int32, *wire.BlockHeader, bool)
 	// GetRawTransaction returns the hex of a transaction that hashes to txid.
 	GetRawTransaction(ctx context.Context, txid string) (string, error)
 	GetMerkle(ctx context.Context, txid string, height int32) (*electrum.MerkleProof, error)
@@ -93,11 +99,23 @@ type Manager struct {
 	mns       map[chainhash.Hash]*SharedMN
 	dissolved map[chainhash.Hash]Spend
 	owned     map[[protx.KeyIDSize]byte]struct{}
+	// hints are heights where Track was told a transaction is mined, tried
+	// before asking the server. They are not saved.
+	hints map[chainhash.Hash]int32
+
+	// seen are the transactions of a refund script's history that a Refresh
+	// has read and that do not spend a collateral of the wallet's, so it need
+	// not read them again: what a transaction spends never changes. It is
+	// guarded by syncMu and is lost on a restart.
+	seen map[chainhash.Hash]struct{}
 }
 
 // NewManager loads the stored state. It makes no network calls.
 func NewManager(chain Chain, store *Store, keys KeyDeriver, coinType uint32, net *chaincfg.Params) (*Manager, error) {
-	m := &Manager{chain: chain, store: store, keys: keys, coinType: coinType, net: net}
+	m := &Manager{
+		chain: chain, store: store, keys: keys, coinType: coinType, net: net,
+		hints: make(map[chainhash.Hash]int32), seen: make(map[chainhash.Hash]struct{}),
+	}
 	snap, err := store.Load()
 	if err != nil {
 		return nil, err
@@ -205,91 +223,19 @@ func (m *Manager) unchanged(height int32, block chainhash.Hash) bool {
 	return hdr != nil && hdr.BlockHash() == block
 }
 
-// Discover reads the whole history of the shared collateral script. Use it to
-// restore a wallet.
-func (m *Manager) Discover(ctx context.Context) error {
-	return m.scan(ctx, true)
-}
-
-// Refresh reads what is new since the last scan, from the cursor, which is
-// rescanDepth blocks below the tip of that scan. If the chain has reorganised
-// past the cursor's block, it reads everything again.
-//
-// Either way, what is stored stays while the block that proved it is still in
-// the chain, whatever the server's history says now: a server that leaves
-// a masternode out, or a spend out, cannot make the wallet forget it. It is
-// dropped only when its block is gone, and found again if the new chain has it.
-func (m *Manager) Refresh(ctx context.Context) error {
-	return m.scan(ctx, false)
-}
-
-// cursorFor is the cursor to save after a scan to tip: the block rescanDepth
-// below it, which a reorg of that depth leaves in the chain, or the tip itself
-// if that block has no header.
-func (m *Manager) cursorFor(tip int32, tipHdr *wire.BlockHeader) *Cursor {
-	h := max(tip-rescanDepth, m.chain.StartHeight(), 1)
-	if h < tip {
-		if hdr := m.chain.HeaderByHeight(h); hdr != nil {
-			return &Cursor{Height: h, Hash: hdr.BlockHash()}
-		}
-	}
-	return &Cursor{Height: tip, Hash: tipHdr.BlockHash()}
-}
-
-type candidate struct {
-	height int32
-	txid   chainhash.Hash
-	raw    []byte
-	tx     *bisonwire.Tx
-	mn     *SharedMN // set for a registration
-}
-
-func (m *Manager) scan(ctx context.Context, full bool) error {
-	m.syncMu.Lock()
-	defer m.syncMu.Unlock()
-
-	snap, err := m.store.Load()
-	if err != nil {
-		return err
-	}
-	tip := m.chain.Tip()
-	tipHdr := m.chain.HeaderByHeight(tip)
-	if tipHdr == nil {
-		return fmt.Errorf("no header at tip %d", tip)
-	}
-	// The cursor is rescanDepth blocks below the tip it was saved at, so a
-	// reorg of up to that depth, which is routine, leaves its block in the
-	// chain and the scan incremental. A cursor block that is gone means a deeper
-	// reorg, which can move anything, and everything is read again.
-	if !full {
-		cur := snap.Cursor
-		if cur.Height <= 0 {
-			full = true
-		} else if h := m.chain.HeaderByHeight(cur.Height); h == nil || h.BlockHash() != cur.Hash {
-			full = true
-		}
-	}
-	from := int32(0)
-	if !full {
-		from = snap.Cursor.Height
-	}
-
-	stored, err := parseRegistrations(snap)
-	if err != nil {
-		return err
-	}
-	up := Update{
-		Dissolutions: make(map[chainhash.Hash]Spend),
-		Cursor:       m.cursorFor(tip, tipHdr),
-	}
-	// What is stored stays while its block does. A registration whose block is
-	// gone is dropped with its spend, and a spend whose block is gone alone.
+// reconcile keeps what is stored while its block is in the chain: a
+// registration whose block is gone is dropped with its spend, and a spend whose
+// block is gone alone. A dropped registration is tracked again, to be proven
+// by the block it is in now. It returns the masternodes that stay and the
+// transaction ids that are already known.
+func (m *Manager) reconcile(snap Snapshot, stored map[chainhash.Hash]*SharedMN, up *Update) (map[chainhash.Hash]*SharedMN, map[chainhash.Hash]struct{}) {
 	live := make(map[chainhash.Hash]*SharedMN)
 	known := make(map[chainhash.Hash]struct{})
 	for h, mn := range stored {
 		r := snap.Registrations[h]
 		if !m.unchanged(r.Height, r.Block) {
 			up.Drop = append(up.Drop, h)
+			up.Track = append(up.Track, r.Tx)
 			continue
 		}
 		live[h] = mn
@@ -303,20 +249,61 @@ func (m *Manager) scan(ctx context.Context, full bool) error {
 			known[sp.TxID] = struct{}{}
 		}
 	}
+	return live, known
+}
 
-	// The server returns the whole history of the script, which every shared
-	// masternode on the network adds to, and a server may refuse one past its
-	// size limit. Reading only what changed needs a status subscription or a
-	// per-masternode marker, which is not done yet.
+type candidate struct {
+	height int32
+	txid   chainhash.Hash
+	raw    []byte
+	tx     *bisonwire.Tx
+	mn     *SharedMN // set for a registration
+}
+
+// Discover reads the whole history of the shared collateral script and finds
+// the registrations of the wallet's in it, and what dissolved them. It is for
+// restoring a wallet whose registrations it has no transaction ids for, and it
+// is best effort: every shared masternode on the network adds to that history,
+// and a server refuses to return one past its limit, which is ErrSharedHistory.
+// Nothing else reads it, and a registration the wallet knows the transaction
+// of is added with Track.
+//
+// What is stored stays while the block that proved it is still in the chain,
+// whatever the server's history says now: a server that leaves a masternode
+// out, or a spend out, cannot make the wallet forget it.
+func (m *Manager) Discover(ctx context.Context) error {
+	m.syncMu.Lock()
+	defer m.syncMu.Unlock()
+
+	snap, err := m.store.Load()
+	if err != nil {
+		return err
+	}
+	tip := m.chain.Tip()
+	tipHdr := m.chain.HeaderByHeight(tip)
+	if tipHdr == nil {
+		return fmt.Errorf("no header at tip %d", tip)
+	}
+	stored, err := parseRegistrations(snap)
+	if err != nil {
+		return err
+	}
+	up := Update{
+		Dissolutions: make(map[chainhash.Hash]Spend),
+		// Discovery has read the history to this block.
+		Cursor: &Cursor{Height: tip, Hash: tipHdr.BlockHash()},
+	}
+	live, known := m.reconcile(snap, stored, &up)
+
 	history, err := m.chain.GetHistory(ctx, sharedCollateralScripthash)
 	if err != nil {
-		return fmt.Errorf("history: %w", err)
+		return fmt.Errorf("%w: %w", ErrSharedHistory, err)
 	}
 	var cands []*candidate
 	for _, e := range history {
 		// Mempool entries are not proven, and entries above the headers are
-		// read once the headers catch up.
-		if e.Height <= from || e.Height > tip {
+		// read by a later Discover, once the headers catch up.
+		if e.Height <= 0 || e.Height > tip {
 			continue
 		}
 		id, err := chainhash.NewHashFromStr(e.TxHash)
