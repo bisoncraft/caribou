@@ -48,6 +48,9 @@ type fakeFunding struct {
 	failLeaseAt int
 	published   []*bisonwire.Tx
 	addrN       byte
+	// publishErr makes PublishBisonTx fail, as a backend that refuses a
+	// transaction.
+	publishErr error
 }
 
 func newFakeFunding() *fakeFunding {
@@ -149,6 +152,9 @@ func (f *fakeFunding) PrivKeyForAddress(a btcutil.Address) (*btcec.PrivateKey, e
 	return k, nil
 }
 func (f *fakeFunding) PublishBisonTx(tx *bisonwire.Tx, _ string) error {
+	if f.publishErr != nil {
+		return f.publishErr
+	}
 	f.published = append(f.published, tx)
 	return nil
 }
@@ -522,9 +528,51 @@ func TestMasternodeRegistrationFlow(t *testing.T) {
 	if _, err := r.dw.BroadcastMasternodeRegistration(ctx, o.ID, blobOf(t, other)); err == nil {
 		t.Fatal("broadcast of another registration")
 	}
+	// The wallet tells the manager of a registration it records, before it is
+	// sent. One the backend refuses is taken out of the wallet, and is no longer
+	// waited for.
+	mgr, err := r.dw.manager()
+	if err != nil {
+		t.Fatal(err)
+	}
+	finalRaw := rawOf(t, final)
+	tracked := func() int {
+		t.Helper()
+		snap, err := mgr.Store().Load()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return len(snap.Tracked)
+	}
+	if err := mgr.Track(finalRaw, 0); err != nil {
+		t.Fatal(err)
+	}
+	r.fw.publishErr = errors.New("rejected")
+	if _, err := r.dw.BroadcastMasternodeRegistration(ctx, o.ID, finalBlob); err == nil {
+		t.Fatal("a refused registration was broadcast")
+	}
+	if tracked() != 0 {
+		t.Fatal("a registration the backend refused is still waited for")
+	}
+	r.fw.publishErr = nil
+	if err := mgr.Track(finalRaw, 0); err != nil {
+		t.Fatal(err)
+	}
 	txid, err := r.dw.BroadcastMasternodeRegistration(ctx, o.ID, finalBlob)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if tracked() != 1 {
+		t.Fatal("a registration that was sent is not waited for")
+	}
+	// Sending it again, which fails, does not give it up: it may be mined.
+	r.fw.publishErr = errors.New("already known")
+	if _, err := r.dw.BroadcastMasternodeRegistration(ctx, o.ID, finalBlob); err == nil {
+		t.Fatal("a failed rebroadcast succeeded")
+	}
+	r.fw.publishErr = nil
+	if tracked() != 1 {
+		t.Fatal("a failed rebroadcast gave up a registration that was sent")
 	}
 	if len(r.fw.published) != 1 || r.fw.published[0].TxHash().String() != txid {
 		t.Fatalf("published %d, txid %s", len(r.fw.published), txid)
@@ -533,9 +581,13 @@ func TestMasternodeRegistrationFlow(t *testing.T) {
 	if list[0].State != "broadcast" || list[0].TxID != txid {
 		t.Fatalf("%+v", list)
 	}
-	// A broadcast offer that is never mined is not stuck: it can be cancelled.
+	// A broadcast offer that is never mined is not stuck: it can be cancelled,
+	// and its registration is no longer waited for.
 	if err := r.dw.CancelMasternodeOffer(ctx, o.ID); err != nil {
 		t.Fatalf("cancelling a broadcast offer that did not register: %v", err)
+	}
+	if tracked() != 0 {
+		t.Fatal("a cancelled offer's registration is still waited for")
 	}
 	if list, _ := r.dw.MasternodeOffers(ctx); len(list) != 0 || len(r.fw.leases) != 0 {
 		t.Fatalf("%+v, %d leases", list, len(r.fw.leases))
@@ -807,4 +859,14 @@ func TestSignedOfferStaysSigned(t *testing.T) {
 			t.Fatalf("a retry's lease is %v, want %v", d, signedLifetime-time.Hour)
 		}
 	}
+}
+
+// rawOf is the serialization of a transaction.
+func rawOf(t *testing.T, tx *bisonwire.Tx) []byte {
+	t.Helper()
+	var b bytes.Buffer
+	if err := tx.Serialize(&b); err != nil {
+		t.Fatal(err)
+	}
+	return b.Bytes()
 }

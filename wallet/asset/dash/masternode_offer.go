@@ -407,7 +407,19 @@ func (dw *dashWallet) CancelMasternodeOffer(ctx context.Context, offerID string)
 	if err := releaseInputs(fw, o); err != nil {
 		return err
 	}
+	// A registration that was sent and is not mined is given up with its offer.
+	if o.TxID != (chainhash.Hash{}) {
+		dw.untrack(mgr, o.TxID)
+	}
 	return mgr.Store().DeleteOffer(id)
+}
+
+// untrack stops the Manager waiting for a registration the wallet gave up. A
+// failure to is only logged: it costs a request to the server for each Refresh.
+func (dw *dashWallet) untrack(mgr *masternode.Manager, id chainhash.Hash) {
+	if err := mgr.Untrack(id); err != nil {
+		dw.log.Warnf("Untracking the masternode registration %s: %v", id, err)
+	}
 }
 
 // usableOffer loads an offer that can still review and sign.
@@ -664,6 +676,12 @@ func (dw *dashWallet) BroadcastMasternodeRegistration(ctx context.Context, offer
 		}
 	}
 	if err := fw.PublishBisonTx(tx, registrationLabel); err != nil {
+		// The wallet records a transaction before it sends it, which tells the
+		// masternode tracking, and takes it out again when it is refused. A
+		// registration that was sent before, and may be mined, is kept.
+		if o.State == masternode.OfferSigned {
+			dw.untrack(mgr, tx.TxHash())
+		}
 		return "", err
 	}
 	o.State, o.TxID = masternode.OfferBroadcast, tx.TxHash()
