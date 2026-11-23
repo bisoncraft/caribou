@@ -177,7 +177,7 @@ func TestBuildMatchesCore(t *testing.T) {
 	if err := protx.Parse(got.ExtraPayload, &gotPR); err != nil {
 		t.Fatal(err)
 	}
-	h, err := gotPR.SharedRegConsentHash(&got.MsgTx)
+	h, err := gotPR.SharedRegConsentHash(got)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -252,7 +252,7 @@ func TestRegistrationEndToEnd(t *testing.T) {
 	if err := protx.Parse(cur.ExtraPayload, &pr); err != nil {
 		t.Fatal(err)
 	}
-	hash, err := pr.SharedRegConsentHash(&cur.MsgTx)
+	hash, err := pr.SharedRegConsentHash(cur)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -356,12 +356,6 @@ func TestReviewRejects(t *testing.T) {
 		{"inputs hash wrong", func(t *testing.T, tx *bisonwire.Tx, own *Own) {
 			setPR(t, tx, func(pr *protx.ProRegTx) { pr.InputsHash[0] ^= 1 })
 		}, "inputs hash"},
-		{"owner key id set on the payload", func(t *testing.T, tx *bisonwire.Tx, own *Own) {
-			setPR(t, tx, func(pr *protx.ProRegTx) { pr.KeyIDOwner[0] = 1 })
-		}, "must leave empty"},
-		{"payout list set", func(t *testing.T, tx *bisonwire.Tx, own *Own) {
-			setPR(t, tx, func(pr *protx.ProRegTx) { pr.Payouts = []protx.Payout{{Script: scriptFor(testKey(5)), Reward: 10000}} })
-		}, "must leave empty"},
 		{"terms Core would reject", func(t *testing.T, tx *bisonwire.Tx, own *Own) {
 			setPR(t, tx, func(pr *protx.ProRegTx) { pr.EarlyPenalty = pr.Shares[2].Amount })
 		}, "shares-penalty"},

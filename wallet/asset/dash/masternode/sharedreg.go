@@ -401,7 +401,7 @@ func Review(tx *bisonwire.Tx, rules NetRules, own Own) (*RegReview, error) {
 	if err != nil {
 		return nil, err
 	}
-	hash, err := pr.SharedRegConsentHash(&cp.MsgTx)
+	hash, err := pr.SharedRegConsentHash(cp)
 	if err != nil {
 		return nil, err
 	}
