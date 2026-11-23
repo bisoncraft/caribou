@@ -17,10 +17,6 @@ import (
 	"github.com/btcsuite/btcd/wire"
 )
 
-// dashSpecialTxVersion is the lowest transaction version that carries an extra
-// payload when its type is not normal.
-const dashSpecialTxVersion = 3
-
 // dashSignatureHash returns the SIGHASH_ALL digest Dash signs for input idx.
 // It is Bitcoin's legacy digest with two differences that matter for special
 // transactions: the version field is the packed version|type, and the extra
@@ -74,7 +70,7 @@ func dashSignatureHash(tx *bisonwire.Tx, idx int, subScript []byte) ([]byte, err
 	}
 	putU32(tx.LockTime)
 
-	if tx.Version >= dashSpecialTxVersion && tx.Type != 0 {
+	if tx.Version >= bisonwire.DashSpecialTxVersion && tx.Type != 0 {
 		if err := wire.WriteVarBytes(&buf, 0, tx.ExtraPayload); err != nil {
 			return nil, err
 		}
