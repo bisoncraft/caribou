@@ -133,11 +133,16 @@ func TestOnTipCoalescesAndNeverBlocks(t *testing.T) {
 
 // chainStub is a masternode.Chain that has no headers, so a Refresh fails, and
 // counts the Refreshes.
-type chainStub struct{ tips atomic.Int32 }
+type chainStub struct {
+	tips atomic.Int32
+	// header, if set, is the header at every height, so a Discover gets as far as
+	// asking for the history.
+	header *wire.BlockHeader
+}
 
 func (c *chainStub) Tip() int32                             { c.tips.Add(1); return 0 }
 func (c *chainStub) StartHeight() int32                     { return 0 }
-func (c *chainStub) HeaderByHeight(int32) *wire.BlockHeader { return nil }
+func (c *chainStub) HeaderByHeight(int32) *wire.BlockHeader { return c.header }
 func (c *chainStub) GetHistory(context.Context, string) ([]electrum.HistoryEntry, error) {
 	return nil, errors.New("no history")
 }
@@ -270,7 +275,8 @@ func TestAdjustBalance(t *testing.T) {
 // A locked wallet that has not cached its owner keys does not scan, which would
 // fetch the history and fail on every block. Unlocking caches them and asks for
 // the Refresh.
-func TestRefreshWaitsForUnlock(t *testing.T) {
+// A Refresh needs no key, so a locked wallet refreshes.
+func TestRefreshRunsWhileLocked(t *testing.T) {
 	dw := openDashSharedWallet(&asset.WalletConfig{DataDir: t.TempDir()}, RegressionNetParams, util.Disabled)
 	chain := &chainStub{}
 	mgr, _ := stakedManager(t, chain, seqKeys{})
@@ -297,20 +303,9 @@ func TestRefreshWaitsForUnlock(t *testing.T) {
 		}
 		t.Fatalf("%d refreshes, want %d", chain.tips.Load(), n)
 	}
-	// The initial run and a tip are skipped: the wallet is not open, so it is
-	// locked.
-	dw.onTip(1)
-	time.Sleep(100 * time.Millisecond)
-	if chain.tips.Load() != 0 {
-		t.Fatalf("scanned while locked without keys: %d", chain.tips.Load())
-	}
-
-	// Unlocking caches the keys, and a Refresh follows with no further tip.
-	dw.afterUnlock()
-	if need, err := mgr.NeedsKeys(); err != nil || need {
-		t.Fatalf("needs keys after the unlock: %v %v", need, err)
-	}
 	waitTips(1)
+	dw.onTip(1)
+	waitTips(2)
 }
 
 func TestRefreshLoop(t *testing.T) {
