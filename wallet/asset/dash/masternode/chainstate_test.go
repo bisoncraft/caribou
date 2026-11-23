@@ -169,6 +169,28 @@ func mutated(t *testing.T, f func(pr *protx.ProRegTx, tx *bisonwire.Tx)) *bisonw
 	return tx
 }
 
+// The fields a shared registration leaves empty cannot be set: the codec
+// refuses to write them, and so to read them, before RegistrationMN sees one.
+func TestSharedRegistrationLeavesFieldsEmpty(t *testing.T) {
+	tests := map[string]func(pr *protx.ProRegTx){
+		"owner key":           func(pr *protx.ProRegTx) { pr.KeyIDOwner[0] = 1 },
+		"external collateral": func(pr *protx.ProRegTx) { pr.Collateral.Hash[0] = 1 },
+		"owner payouts": func(pr *protx.ProRegTx) {
+			pr.Payouts = []protx.Payout{{Script: pr.Shares[0].RefundScript, Reward: 10000}}
+		},
+	}
+	for name, f := range tests {
+		var pr protx.ProRegTx
+		if err := protx.Parse(specialTx(t, "proregtx").ExtraPayload, &pr); err != nil {
+			t.Fatal(err)
+		}
+		f(&pr)
+		if err := pr.Serialize(&bytes.Buffer{}); err == nil {
+			t.Errorf("%s: written", name)
+		}
+	}
+}
+
 func TestRegistrationMNRejects(t *testing.T) {
 	tests := map[string]struct {
 		tx     func() *bisonwire.Tx
@@ -197,12 +219,6 @@ func TestRegistrationMNRejects(t *testing.T) {
 			tx := specialTx(t, "proregtx")
 			tx.ExtraPayload = tx.ExtraPayload[:len(tx.ExtraPayload)-1]
 			return tx
-		}, 798},
-		"owner key set": {func() *bisonwire.Tx {
-			return mutated(t, func(pr *protx.ProRegTx, _ *bisonwire.Tx) { pr.KeyIDOwner[0] = 1 })
-		}, 798},
-		"external collateral": {func() *bisonwire.Tx {
-			return mutated(t, func(pr *protx.ProRegTx, _ *bisonwire.Tx) { pr.Collateral.Hash[0] = 1 })
 		}, 798},
 		"payload signature": {func() *bisonwire.Tx {
 			return mutated(t, func(pr *protx.ProRegTx, _ *bisonwire.Tx) { pr.PayloadSig = make([]byte, 65) })
@@ -254,11 +270,6 @@ func TestRegistrationMNRejects(t *testing.T) {
 		}, 798},
 		"evo masternode": {func() *bisonwire.Tx {
 			return mutated(t, func(pr *protx.ProRegTx, _ *bisonwire.Tx) { pr.MNType = protx.TypeEvo })
-		}, 798},
-		"owner payouts set": {func() *bisonwire.Tx {
-			return mutated(t, func(pr *protx.ProRegTx, _ *bisonwire.Tx) {
-				pr.Payouts = []protx.Payout{{Script: pr.Shares[0].RefundScript, Reward: 10000}}
-			})
 		}, 798},
 		// 2^62 four times wraps an int64 sum to zero; three of them and one
 		// that makes the total exactly the collateral wrap to 1000 DASH.
