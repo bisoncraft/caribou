@@ -84,6 +84,10 @@ func (c nodeChain) GetHistory(ctx context.Context, sh string) ([]electrum.Histor
 	return c.node.GetHistory(ctx, sh)
 }
 
+func (c nodeChain) SubscribeScripthash(ctx context.Context, sh string) (*electrum.ScripthashStatus, error) {
+	return c.node.SubscribeScripthash(ctx, sh)
+}
+
 func (c nodeChain) GetRawTransaction(ctx context.Context, id string) (string, error) {
 	return c.node.GetRawTransaction(ctx, id)
 }

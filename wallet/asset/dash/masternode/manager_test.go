@@ -10,7 +10,9 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -47,6 +49,8 @@ type fakeChain struct {
 	merkleCalls map[string]int
 	histCalls   int
 	infoCalls   int
+	subCalls    int
+	subErr      error
 }
 
 func (f *fakeChain) Tip() int32 {
@@ -75,6 +79,30 @@ func (f *fakeChain) GetHistory(_ context.Context, sh string) ([]electrum.History
 		return nil, errors.New("wrong scripthash")
 	}
 	return slices.Clone(f.history), nil
+}
+
+// SubscribeScripthash serves a status derived from the history, as a server's
+// is: empty with no history, and different when the history is.
+func (f *fakeChain) SubscribeScripthash(_ context.Context, sh string) (*electrum.ScripthashStatus, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.subCalls++
+	if f.subErr != nil {
+		return nil, f.subErr
+	}
+	if sh != sharedCollateralScripthash {
+		return nil, errors.New("wrong scripthash")
+	}
+	var b strings.Builder
+	for _, e := range f.history {
+		fmt.Fprintf(&b, "%s:%d:", e.TxHash, e.Height)
+	}
+	st := &electrum.ScripthashStatus{Scripthash: sh}
+	if b.Len() > 0 {
+		sum := sha256.Sum256([]byte(b.String()))
+		st.Status = hex.EncodeToString(sum[:])
+	}
+	return st, nil
 }
 
 func (f *fakeChain) GetRawTransaction(_ context.Context, txid string) (string, error) {
@@ -810,6 +838,110 @@ func TestEntriesAboveTipAreLeft(t *testing.T) {
 	}
 }
 
+// The history of the shared script grows with every shared masternode on the
+// network, so a tip that leaves its status as it was must not read it again,
+// and a change in it must be read.
+func TestRefreshSkipsHistoryWhenStatusUnchanged(t *testing.T) {
+	e := newEnv(t)
+	e.own(map[uint32][20]byte{1: e.idA, 2: e.idB}, 0)
+	e.setHistory(entry(heightA, e.a.ProTxHash))
+	m := e.manager()
+	if err := m.Refresh(t.Context()); err != nil { // no cursor: a full scan
+		t.Fatal(err)
+	}
+	if e.chain.histCalls != 1 {
+		t.Fatalf("the first scan read the history %d times", e.chain.histCalls)
+	}
+
+	for range 3 {
+		if err := m.Refresh(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if e.chain.histCalls != 1 {
+		t.Fatalf("an unchanged status read the history again: %d reads", e.chain.histCalls)
+	}
+	if m.StakedAmount() != e.a.Shares[0].Amount {
+		t.Fatal("A is lost")
+	}
+
+	// B is mined and D dissolves it: the status changes, and both are read.
+	e.addSynth(e.txB, 905)
+	if err := m.Refresh(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if e.chain.histCalls != 2 {
+		t.Fatalf("a changed status did not read the history: %d reads", e.chain.histCalls)
+	}
+	if len(e.snapshot().Registrations) != 2 {
+		t.Fatal("B was not found by the scan after the status changed")
+	}
+}
+
+// A reorg that puts a transaction in another block at the same height leaves
+// the status of the script as it was, since it hashes ids and heights. What the
+// old block proved is dropped, and the transaction must be read again to be
+// proven by the new one, so a dropped entry is never skipped.
+func TestRefreshReadsAgainAfterABlockIsReplaced(t *testing.T) {
+	e := newEnv(t)
+	e.own(map[uint32][20]byte{1: e.idA, 2: e.idB}, 0)
+	// B is mined above the cursor a scan to the tip leaves, so a reorg of that
+	// block does not take the cursor with it.
+	e.setHistory(entry(heightA, e.a.ProTxHash))
+	e.addSynth(e.txB, 905)
+	m := e.manager()
+	if err := m.Discover(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	old := e.snapshot().Registrations[e.b.ProTxHash]
+	if old.Block == (chainhash.Hash{}) {
+		t.Fatal("B was not found by the full scan")
+	}
+
+	e.chain.headers[905] = synthHeader(e.b.ProTxHash, 905)
+	e.chain.headers[905].Nonce++
+	if err := m.Refresh(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	got := e.snapshot().Registrations[e.b.ProTxHash]
+	if got.Block == old.Block || got.Block != e.chain.headers[905].BlockHash() {
+		t.Fatalf("B is proven by %s, want the new block", got.Block)
+	}
+}
+
+// An entry above the headers is read once they catch up, and the status does
+// not change when they do, so a scan that left one must read the history again.
+func TestRefreshReadsAgainWhileAnEntryIsAboveTheTip(t *testing.T) {
+	e := newEnv(t)
+	e.own(map[uint32][20]byte{1: e.idA}, 0)
+	e.chain.history[0].Height = tipHeight + 1
+	m := e.manager()
+	for range 3 {
+		if err := m.Refresh(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if e.chain.histCalls != 3 {
+		t.Fatalf("%d reads of the history for 3 scans with an entry above the tip", e.chain.histCalls)
+	}
+}
+
+// A server that cannot give the status is not trusted to have nothing new.
+func TestRefreshReadsWithoutAStatus(t *testing.T) {
+	e := newEnv(t)
+	e.own(map[uint32][20]byte{1: e.idA}, 0)
+	e.chain.subErr = errors.New("no subscription")
+	m := e.manager()
+	for range 3 {
+		if err := m.Refresh(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if e.chain.histCalls != 3 {
+		t.Fatalf("%d reads of the history for 3 scans without a status", e.chain.histCalls)
+	}
+}
+
 func TestSharedMN(t *testing.T) {
 	e := newEnv(t)
 	e.own(map[uint32][20]byte{1: e.idA}, 0)
@@ -881,13 +1013,15 @@ func TestSharedMN(t *testing.T) {
 	t.Run("mismatch refreshes once", func(t *testing.T) {
 		e.chain.info = loadInfo(t, "protx_info_shared.json")
 		e.chain.info.State.EarlyPenalty++
-		e.chain.infoCalls, e.chain.histCalls = 0, 0
+		e.chain.infoCalls, e.chain.subCalls = 0, 0
 		_, err := m.SharedMN(ctx, e.a.ProTxHash, true)
 		if !errors.Is(err, ErrInfoMismatch) {
 			t.Fatalf("%v", err)
 		}
-		if e.chain.infoCalls != 2 || e.chain.histCalls != 1 {
-			t.Fatalf("%d info calls, %d history calls", e.chain.infoCalls, e.chain.histCalls)
+		// One scan asks for the script's status once, whether or not the
+		// status says there is anything to read.
+		if e.chain.infoCalls != 2 || e.chain.subCalls != 1 {
+			t.Fatalf("%d info calls, %d scans", e.chain.infoCalls, e.chain.subCalls)
 		}
 	})
 
