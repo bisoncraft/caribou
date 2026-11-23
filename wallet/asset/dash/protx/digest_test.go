@@ -65,7 +65,7 @@ func TestSharedRegConsentHash(t *testing.T) {
 			if err := Parse(tx.ExtraPayload, &p); err != nil {
 				t.Fatal(err)
 			}
-			got, err := p.SharedRegConsentHash(&tx.MsgTx)
+			got, err := p.SharedRegConsentHash(tx)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -134,7 +134,7 @@ func TestSharedRegConsentHashBinding(t *testing.T) {
 			if err := Parse(tx.ExtraPayload, &base); err != nil {
 				t.Fatal(err)
 			}
-			want, err := base.SharedRegConsentHash(&tx.MsgTx)
+			want, err := base.SharedRegConsentHash(tx)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -143,9 +143,10 @@ func TestSharedRegConsentHashBinding(t *testing.T) {
 			if err := Parse(tx.ExtraPayload, &p); err != nil {
 				t.Fatal(err)
 			}
-			msg := tx.MsgTx.Copy()
-			tc.mutate(&p, msg)
-			got, err := p.SharedRegConsentHash(msg)
+			msg := *tx
+			msg.MsgTx = *tx.MsgTx.Copy()
+			tc.mutate(&p, &msg.MsgTx)
+			got, err := p.SharedRegConsentHash(&msg)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -159,12 +160,24 @@ func TestSharedRegConsentHashBinding(t *testing.T) {
 func TestSharedRegConsentHashRefuses(t *testing.T) {
 	t.Parallel()
 
+	// A digest is for one transaction type: it must not be valid for another.
+	_, typed := loadVector(t, "regshared")
+	var reg ProRegTx
+	if err := Parse(typed.ExtraPayload, &reg); err != nil {
+		t.Fatal(err)
+	}
+	wrong := *typed
+	wrong.Type = txTypeProDis
+	if _, err := reg.SharedRegConsentHash(&wrong); !errors.Is(err, ErrWrongTxType) {
+		t.Errorf("wrong type: %v, want ErrWrongTxType", err)
+	}
+
 	_, v2tx := loadVector(t, "regfund")
 	var v2 ProRegTx
 	if err := Parse(v2tx.ExtraPayload, &v2); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := v2.SharedRegConsentHash(&v2tx.MsgTx); !errors.Is(err, ErrUnsupportedVersion) {
+	if _, err := v2.SharedRegConsentHash(v2tx); !errors.Is(err, ErrUnsupportedVersion) {
 		t.Errorf("version 2: %v, want ErrUnsupportedVersion", err)
 	}
 
@@ -174,7 +187,7 @@ func TestSharedRegConsentHashRefuses(t *testing.T) {
 	if err := Parse(evoTx.ExtraPayload, &evo); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := evo.SharedRegConsentHash(&evoTx.MsgTx); err == nil {
+	if _, err := evo.SharedRegConsentHash(evoTx); err == nil {
 		t.Error("no shares: expected an error")
 	}
 }
@@ -196,7 +209,7 @@ func TestSharedRegConsentHashPlatformNodeID(t *testing.T) {
 		}
 		p.MNType = mnType
 		p.PlatformNodeID[0] = id
-		h, err := p.SharedRegConsentHash(&tx.MsgTx)
+		h, err := p.SharedRegConsentHash(tx)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -238,7 +251,7 @@ func TestProDisTxSignHash(t *testing.T) {
 			if p.ProTxHash != regTx.TxHash() {
 				t.Fatalf("proTxHash %s is not the registration %s", p.ProTxHash, regTx.TxHash())
 			}
-			got, err := p.SignHash(&tx.MsgTx, uint8(len(p.Sigs)))
+			got, err := p.SignHash(tx)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -274,17 +287,17 @@ func TestProDisTxSignHashBinding(t *testing.T) {
 
 	tests := []struct {
 		name   string
-		mutate func(p *ProDisTx, tx *wire.MsgTx, sigCount *uint8)
+		mutate func(p *ProDisTx, tx *wire.MsgTx)
 	}{
-		{"signature count selects unilateral or unanimous", func(p *ProDisTx, tx *wire.MsgTx, n *uint8) { *n = 1 }},
-		{"actor: who pays the fee and is penalised", func(p *ProDisTx, tx *wire.MsgTx, n *uint8) { p.ActorIndex ^= 1 }},
-		{"proTxHash: which masternode", func(p *ProDisTx, tx *wire.MsgTx, n *uint8) { p.ProTxHash[0] ^= 1 }},
-		{"output value: what a share is refunded", func(p *ProDisTx, tx *wire.MsgTx, n *uint8) { tx.TxOut[0].Value-- }},
-		{"output script: where a share is refunded", func(p *ProDisTx, tx *wire.MsgTx, n *uint8) { tx.TxOut[0].PkScript[3] ^= 1 }},
-		{"input outpoint: which collateral is spent", func(p *ProDisTx, tx *wire.MsgTx, n *uint8) { tx.TxIn[0].PreviousOutPoint.Index++ }},
-		{"input sequence", func(p *ProDisTx, tx *wire.MsgTx, n *uint8) { tx.TxIn[0].Sequence ^= 1 }},
-		{"lock time", func(p *ProDisTx, tx *wire.MsgTx, n *uint8) { tx.LockTime++ }},
-		{"transaction version", func(p *ProDisTx, tx *wire.MsgTx, n *uint8) { tx.Version = 2 }},
+		{"signature count selects unilateral or unanimous", func(p *ProDisTx, tx *wire.MsgTx) { p.Sigs = p.Sigs[:1] }},
+		{"actor: who pays the fee and is penalised", func(p *ProDisTx, tx *wire.MsgTx) { p.ActorIndex ^= 1 }},
+		{"proTxHash: which masternode", func(p *ProDisTx, tx *wire.MsgTx) { p.ProTxHash[0] ^= 1 }},
+		{"output value: what a share is refunded", func(p *ProDisTx, tx *wire.MsgTx) { tx.TxOut[0].Value-- }},
+		{"output script: where a share is refunded", func(p *ProDisTx, tx *wire.MsgTx) { tx.TxOut[0].PkScript[3] ^= 1 }},
+		{"input outpoint: which collateral is spent", func(p *ProDisTx, tx *wire.MsgTx) { tx.TxIn[0].PreviousOutPoint.Index++ }},
+		{"input sequence", func(p *ProDisTx, tx *wire.MsgTx) { tx.TxIn[0].Sequence ^= 1 }},
+		{"lock time", func(p *ProDisTx, tx *wire.MsgTx) { tx.LockTime++ }},
+		{"transaction version", func(p *ProDisTx, tx *wire.MsgTx) { tx.Version = 2 }},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -295,16 +308,16 @@ func TestProDisTxSignHashBinding(t *testing.T) {
 			if err := Parse(tx.ExtraPayload, &base); err != nil {
 				t.Fatal(err)
 			}
-			want, err := base.SignHash(&tx.MsgTx, uint8(len(base.Sigs)))
+			want, err := base.SignHash(tx)
 			if err != nil {
 				t.Fatal(err)
 			}
 
 			p := base
-			msg := tx.MsgTx.Copy()
-			sigCount := uint8(len(base.Sigs))
-			tc.mutate(&p, msg, &sigCount)
-			got, err := p.SignHash(msg, sigCount)
+			msg := *tx
+			msg.MsgTx = *tx.MsgTx.Copy()
+			tc.mutate(&p, &msg.MsgTx)
+			got, err := p.SignHash(&msg)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -320,12 +333,12 @@ func TestProDisTxSignHashBinding(t *testing.T) {
 	if err := Parse(tx.ExtraPayload, &p); err != nil {
 		t.Fatal(err)
 	}
-	want, err := p.SignHash(&tx.MsgTx, 2)
+	want, err := p.SignHash(tx)
 	if err != nil {
 		t.Fatal(err)
 	}
 	p.Sigs[0][0] ^= 1
-	got, err := p.SignHash(&tx.MsgTx, 2)
+	got, err := p.SignHash(tx)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -445,10 +458,32 @@ func TestSharedPayloadHashes(t *testing.T) {
 	})
 }
 
+// TestProDisTxSignHashRefuses pins that a dissolution digest is only for a
+// dissolution transaction and for a signature count that fits the payload.
+func TestProDisTxSignHashRefuses(t *testing.T) {
+	t.Parallel()
+
+	_, dis := loadVector(t, "dis")
+	var p ProDisTx
+	if err := Parse(dis.ExtraPayload, &p); err != nil {
+		t.Fatal(err)
+	}
+	wrong := *dis
+	wrong.Type = txTypeProReg
+	if _, err := p.SignHash(&wrong); !errors.Is(err, ErrWrongTxType) {
+		t.Errorf("wrong type: %v, want ErrWrongTxType", err)
+	}
+
+	p.Sigs = make([][CompactSigSize]byte, 256)
+	if _, err := p.SignHash(dis); !errors.Is(err, ErrFieldTooLong) {
+		t.Errorf("256 signatures: %v, want ErrFieldTooLong", err)
+	}
+}
+
 func TestSharedDigestsRefuseOtherVersions(t *testing.T) {
 	t.Parallel()
 
-	if _, err := (&ProDisTx{Version: 2}).SignHash(wire.NewMsgTx(3), 1); !errors.Is(err, ErrUnsupportedVersion) {
+	if _, err := (&ProDisTx{Version: 2}).SignHash(&bisonwire.Tx{Type: txTypeProDis}); !errors.Is(err, ErrUnsupportedVersion) {
 		t.Errorf("ProDisTx: %v", err)
 	}
 	if _, err := (&ProUpShareTx{Version: 2}).PayloadHash(); !errors.Is(err, ErrUnsupportedVersion) {
@@ -459,16 +494,17 @@ func TestSharedDigestsRefuseOtherVersions(t *testing.T) {
 	}
 }
 
-// TestVerifyCompactRejects pins the rules Dash Core applies to a share owner's
-// signature, each of which closes a way to change a signature without the key:
-// the wrong length, a header outside 27 to 34 (which the key recovery ignores
-// the high bits of), and a high S (the same signature with S negated).
+// TestVerifyCompactRejects pins what VerifyCompact refuses, each of which closes
+// a way to change a signature without the key: the wrong length, a header
+// outside 27 to 34 (the recovery rejects it), and a high S (the same signature
+// with S negated), which is this wallet's policy and not known to be a Dash
+// Core rule.
 func TestVerifyCompactRejects(t *testing.T) {
 	t.Parallel()
 
 	reg, _ := sharedRegistration(t)
 	_, tx := loadVector(t, "regshared")
-	hash, err := reg.SharedRegConsentHash(&tx.MsgTx)
+	hash, err := reg.SharedRegConsentHash(tx)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -523,7 +559,7 @@ func TestVerifyCompactKeepsRecoveryCause(t *testing.T) {
 	t.Parallel()
 
 	// All zero is not a signature: r and s are zero, which recovery refuses.
-	err := VerifyCompact(chainhash.Hash{}, [KeyIDSize]byte{}, append([]byte{compactHdrMin}, make([]byte, CompactSigSize-1)...))
+	err := VerifyCompact(chainhash.Hash{}, [KeyIDSize]byte{}, append([]byte{27}, make([]byte, CompactSigSize-1)...))
 	if !errors.Is(err, ErrBadSignature) {
 		t.Fatalf("error %v, want ErrBadSignature", err)
 	}
@@ -540,7 +576,7 @@ func highSForm(sig []byte) []byte {
 	out := bytes.Clone(sig)
 	s := new(big.Int).SetBytes(out[33:])
 	s.Sub(btcec.S256().N, s).FillBytes(out[33:])
-	out[0] = compactHdrMin + ((out[0] - compactHdrMin) ^ 1)
+	out[0] = 27 + ((out[0] - 27) ^ 1)
 	return out
 }
 
@@ -552,7 +588,7 @@ func TestVerifyCompactHighS(t *testing.T) {
 
 	reg, _ := sharedRegistration(t)
 	_, tx := loadVector(t, "regshared")
-	hash, err := reg.SharedRegConsentHash(&tx.MsgTx)
+	hash, err := reg.SharedRegConsentHash(tx)
 	if err != nil {
 		t.Fatal(err)
 	}

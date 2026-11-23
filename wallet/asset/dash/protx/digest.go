@@ -16,6 +16,8 @@ import (
 	"github.com/btcsuite/btcd/btcutil"
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
 	"github.com/btcsuite/btcd/wire"
+
+	"github.com/bisoncraft/caribou/wallet/utxowallet/bisonwire"
 )
 
 // The digests below are what the share owners of a shared masternode sign, as
@@ -46,18 +48,18 @@ const (
 
 	consentMagic  = "DashSharedMNReg"
 	dissolveMagic = "DashSharedMNDissolve"
-
-	// compactHdrMin and compactHdrMax bound the header byte of a compact
-	// signature: 27 plus the recovery id, plus 4 for a compressed key.
-	compactHdrMin = 27
-	compactHdrMax = 34
 )
 
-// ErrBadSignature is returned by VerifyCompact for a signature Dash Core would
-// not accept for the key.
+// ErrBadSignature is returned by VerifyCompact for a signature it does not
+// accept for the key.
 var ErrBadSignature = errors.New("bad compact signature")
 
-// halfOrder is half the secp256k1 group order. Dash Core only accepts a
+// ErrWrongTxType is returned by a digest for a transaction that is not of the
+// type the payload belongs to. Dash hashes the transaction's own type, so a
+// digest for another type would be valid for a transaction that cannot carry it.
+var ErrWrongTxType = errors.New("wrong transaction type")
+
+// halfOrder is half the secp256k1 group order. VerifyCompact only accepts a
 // signature whose S is at most this, so a third party cannot malleate it.
 var halfOrder = new(big.Int).Rsh(btcec.S256().N, 1)
 
@@ -80,9 +82,12 @@ var halfOrder = new(big.Int).Rsh(btcec.S256().N, 1)
 //
 // It is for a shared registration at version 3, so it fails for another
 // version and for a registration with no shares.
-func (p *ProRegTx) SharedRegConsentHash(tx *wire.MsgTx) (chainhash.Hash, error) {
+func (p *ProRegTx) SharedRegConsentHash(tx *bisonwire.Tx) (chainhash.Hash, error) {
 	if p.Version != VersionExtAddr {
 		return chainhash.Hash{}, ErrUnsupportedVersion
+	}
+	if tx.Type != txTypeProReg {
+		return chainhash.Hash{}, fmt.Errorf("%w: %d, want %d", ErrWrongTxType, tx.Type, txTypeProReg)
 	}
 	if len(p.Shares) == 0 {
 		return chainhash.Hash{}, errors.New("not a shared registration: no shares")
@@ -92,7 +97,7 @@ func (p *ProRegTx) SharedRegConsentHash(tx *wire.MsgTx) (chainhash.Hash, error) 
 	if err := writeString(&buf, consentMagic); err != nil {
 		return chainhash.Hash{}, err
 	}
-	if err := writeU16s(&buf, p.Version, uint16(tx.Version), txTypeProReg); err != nil {
+	if err := writeU16s(&buf, p.Version, uint16(tx.Version), tx.Type); err != nil {
 		return chainhash.Hash{}, err
 	}
 	if err := writeU32(&buf, tx.LockTime); err != nil {
@@ -105,7 +110,7 @@ func (p *ProRegTx) SharedRegConsentHash(tx *wire.MsgTx) (chainhash.Hash, error) 
 			return chainhash.Hash{}, err
 		}
 	}
-	outputs, err := outputsHash(tx)
+	outputs, err := outputsHash(&tx.MsgTx)
 	if err != nil {
 		return chainhash.Hash{}, err
 	}
@@ -145,29 +150,34 @@ func (p *ProRegTx) SharedRegConsentHash(tx *wire.MsgTx) (chainhash.Hash, error) 
 }
 
 // SignHash returns the digest the signatures of a dissolution cover. tx is the
-// dissolution transaction and sigCount is how many signatures it carries: one
-// is a unilateral dissolution by the actor share (penalised during the early
-// period) and one per share is a unanimous one. The count is part of the digest
-// so a signature cannot be reused to reinterpret one kind as the other. The
-// digest covers the transaction's outpoints, sequences and outputs directly,
-// which is why the payload has no inputs hash.
+// dissolution transaction, and must be of that type. The number of signatures
+// in the payload is part of the digest: one is a unilateral dissolution by the
+// actor share (penalised during the early period) and one per share is a
+// unanimous one, so a signature cannot be reused to reinterpret one kind as
+// the other. Set Sigs to the signatures the transaction will carry, or to as
+// many placeholders, before signing. The digest covers the transaction's
+// outpoints, sequences and outputs directly, which is why the payload has no
+// inputs hash.
 //
 // A unilateral signature is by the actor share's owner, and signature i of a
 // unanimous one by share i's.
 //
-// It does not check that sigCount is 1 or the number of shares, or that
-// ActorIndex is a share of the masternode, which Dash Core enforces when it
-// validates the transaction, so the caller must.
-func (p *ProDisTx) SignHash(tx *wire.MsgTx, sigCount uint8) (chainhash.Hash, error) {
+// It does not check that the signature count is 1 or the number of shares, or
+// that ActorIndex is a share of the masternode, which Dash Core enforces when
+// it validates the transaction, so the caller must.
+func (p *ProDisTx) SignHash(tx *bisonwire.Tx) (chainhash.Hash, error) {
 	if p.Version != SharedVersion {
 		return chainhash.Hash{}, ErrUnsupportedVersion
+	}
+	if tx.Type != txTypeProDis {
+		return chainhash.Hash{}, fmt.Errorf("%w: %d, want %d", ErrWrongTxType, tx.Type, txTypeProDis)
 	}
 
 	var buf bytes.Buffer
 	if err := writeString(&buf, dissolveMagic); err != nil {
 		return chainhash.Hash{}, err
 	}
-	if err := writeU16s(&buf, p.Version, uint16(tx.Version), txTypeProDis); err != nil {
+	if err := writeU16s(&buf, p.Version, uint16(tx.Version), tx.Type); err != nil {
 		return chainhash.Hash{}, err
 	}
 	if err := writeU32(&buf, tx.LockTime); err != nil {
@@ -193,7 +203,9 @@ func (p *ProDisTx) SignHash(tx *wire.MsgTx, sigCount uint8) (chainhash.Hash, err
 	if err := writeU16s(&buf, p.ActorIndex); err != nil {
 		return chainhash.Hash{}, err
 	}
-	buf.WriteByte(sigCount)
+	if err := writeCount8(&buf, "signatures", len(p.Sigs)); err != nil {
+		return chainhash.Hash{}, err
+	}
 	return chainhash.DoubleHashH(buf.Bytes()), nil
 }
 
@@ -210,16 +222,17 @@ func (p *ProUpSharedRegTx) PayloadHash() (chainhash.Hash, error) {
 	return payloadHash(p.serializeBody)
 }
 
-// VerifyCompact checks a signature the way Dash Core does for a share owner: 65
-// bytes, a header between 27 and 34, the S value at most half the group order,
-// and a recovered public key whose hash160, in the form the header says,
-// is keyID.
+// VerifyCompact checks a share owner's compact signature: 65 bytes, a header
+// between 27 and 34 and a recovered public key whose hash160, in the form the
+// header says, is keyID (the header is checked by the recovery).
+// It also requires S to be at most half the group order. That is this wallet's
+// policy and not a Dash Core rule as far as is known: Core's key recovery
+// accepts a high S, so a signature this refuses may still confirm. It keeps a
+// signature from being changed by a third party without the key, and the
+// signatures this wallet makes always pass it.
 func VerifyCompact(hash chainhash.Hash, keyID [KeyIDSize]byte, sig []byte) error {
 	if len(sig) != CompactSigSize {
 		return fmt.Errorf("%w: %d bytes", ErrBadSignature, len(sig))
-	}
-	if sig[0] < compactHdrMin || sig[0] > compactHdrMax {
-		return fmt.Errorf("%w: header %d", ErrBadSignature, sig[0])
 	}
 	if new(big.Int).SetBytes(sig[33:]).Cmp(halfOrder) > 0 {
 		return fmt.Errorf("%w: S is not low", ErrBadSignature)
