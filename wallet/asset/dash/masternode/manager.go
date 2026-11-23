@@ -64,10 +64,6 @@ type Chain interface {
 	// HeaderByHeight returns nil if the header is not known.
 	HeaderByHeight(height int32) *wire.BlockHeader
 	GetHistory(ctx context.Context, scripthash string) ([]electrum.HistoryEntry, error)
-	// SubscribeScripthash returns the server's status of a scripthash, a hash
-	// of its history that is empty when it has none and changes when the
-	// history does.
-	SubscribeScripthash(ctx context.Context, scripthash string) (*electrum.ScripthashStatus, error)
 	// GetRawTransaction returns the hex of a transaction that hashes to txid.
 	GetRawTransaction(ctx context.Context, txid string) (string, error)
 	GetMerkle(ctx context.Context, txid string, height int32) (*electrum.MerkleProof, error)
@@ -97,14 +93,6 @@ type Manager struct {
 	mns       map[chainhash.Hash]*SharedMN
 	dissolved map[chainhash.Hash]Spend
 	owned     map[[protx.KeyIDSize]byte]struct{}
-
-	// histStatus is the status of the shared collateral script when a scan
-	// last read all of its history that was at or below the tip, and histKnown
-	// says it is set. A scan that finds the status the same has nothing new to
-	// read. It is guarded by syncMu and is lost on a restart, which costs one
-	// full read.
-	histStatus string
-	histKnown  bool
 }
 
 // NewManager loads the stored state. It makes no network calls.
@@ -318,36 +306,14 @@ func (m *Manager) scan(ctx context.Context, full bool) error {
 
 	// The server returns the whole history of the script, which every shared
 	// masternode on the network adds to, and a server may refuse one past its
-	// size limit. The status of the script changes when its history does, so a
-	// scan that finds it as it was after the last full read has nothing new to
-	// read, unless it has to drop something that a reorg removed, which may
-	// need to be found again. The status is taken before the history, so a
-	// change in between is seen by the next scan. A scan that cannot get the
-	// status reads the history.
-	var status string
-	statusOK := false
-	if st, err := m.chain.SubscribeScripthash(ctx, sharedCollateralScripthash); err == nil {
-		status, statusOK = st.Status, true
+	// size limit. Reading only what changed needs a status subscription or a
+	// per-masternode marker, which is not done yet.
+	history, err := m.chain.GetHistory(ctx, sharedCollateralScripthash)
+	if err != nil {
+		return fmt.Errorf("history: %w", err)
 	}
-	dropped := len(up.Drop) > 0 || len(up.DropDissolutions) > 0
-	skip := !full && !dropped && statusOK && m.histKnown && status == m.histStatus
-	m.histKnown = false
-
-	var history []electrum.HistoryEntry
-	if !skip {
-		history, err = m.chain.GetHistory(ctx, sharedCollateralScripthash)
-		if err != nil {
-			return fmt.Errorf("history: %w", err)
-		}
-	}
-	// pending is set if the history has an entry above the headers, which is
-	// read once they catch up, and the status does not change when they do.
-	pending := false
 	var cands []*candidate
 	for _, e := range history {
-		if e.Height > tip {
-			pending = true
-		}
 		// Mempool entries are not proven, and entries above the headers are
 		// read once the headers catch up.
 		if e.Height <= from || e.Height > tip {
@@ -446,9 +412,6 @@ func (m *Manager) scan(ctx context.Context, full bool) error {
 	}
 	if unprovable > 0 {
 		return fmt.Errorf("%w: %d skipped", ErrUnprovable, unprovable)
-	}
-	if statusOK && !pending {
-		m.histStatus, m.histKnown = status, true
 	}
 	return nil
 }
