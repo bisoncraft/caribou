@@ -10,6 +10,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 
 	"github.com/btcsuite/btcd/btcec/v2"
 	"github.com/btcsuite/btcd/btcutil"
@@ -117,6 +118,16 @@ func fundedTx(f Funding, fee int64, typ uint16) (*bisonwire.Tx, map[int][]byte, 
 	return &bisonwire.Tx{Chain: "dash", MsgTx: *msg, Type: typ}, prev, nil
 }
 
+// setExtraPayload makes tx carry p as its extra payload.
+func setExtraPayload(tx *bisonwire.Tx, p interface{ Serialize(io.Writer) error }) error {
+	var b bytes.Buffer
+	if err := p.Serialize(&b); err != nil {
+		return err
+	}
+	tx.ExtraPayload = b.Bytes()
+	return nil
+}
+
 func serializeTx(tx *bisonwire.Tx) ([]byte, error) {
 	var b bytes.Buffer
 	if err := tx.Serialize(&b); err != nil {
@@ -178,14 +189,7 @@ func NewShareUpdate(m *SharedMN, share int, reward []byte, f Funding, fee int64)
 	return u, nil
 }
 
-func (u *ShareUpdate) sync() error {
-	var b bytes.Buffer
-	if err := u.pu.Serialize(&b); err != nil {
-		return err
-	}
-	u.tx.ExtraPayload = b.Bytes()
-	return nil
-}
+func (u *ShareUpdate) sync() error { return setExtraPayload(u.tx, &u.pu) }
 
 // Sign signs the update with the share's owner key, then the funding inputs
 // with secrets. It changes nothing if it fails.
@@ -268,9 +272,6 @@ func NewRegistrarUpdate(m *SharedMN, c RegistrarChange, f Funding, fee int64) (*
 	if err := m.checkRegistrar(c); err != nil {
 		return nil, err
 	}
-	// A zero key means the masternode's state was not filled in, or its operator
-	// was revoked, which this API does not recover from: with it every update
-	// would report an operator change.
 	tx, _, err := fundedTx(f, fee, txTypeProUpSharedReg)
 	if err != nil {
 		return nil, err
@@ -293,14 +294,7 @@ func NewRegistrarUpdate(m *SharedMN, c RegistrarChange, f Funding, fee int64) (*
 	return u, nil
 }
 
-func (u *RegistrarUpdate) sync() error {
-	var b bytes.Buffer
-	if err := u.pu.Serialize(&b); err != nil {
-		return err
-	}
-	u.tx.ExtraPayload = b.Bytes()
-	return nil
-}
+func (u *RegistrarUpdate) sync() error { return setExtraPayload(u.tx, &u.pu) }
 
 // ReviewRegistrarUpdate is what a share owner runs before it signs a registrar
 // update someone else made. A signature binds the keys and the input outpoints
@@ -331,9 +325,6 @@ func ReviewRegistrarUpdate(tx *bisonwire.Tx, m *SharedMN, want RegistrarChange) 
 	if err := m.checkRegistrar(want); err != nil {
 		return nil, err
 	}
-	// A zero key means the masternode's state was not filled in, or its operator
-	// was revoked, which this API does not recover from: with it every update
-	// would report an operator change.
 	if len(pu.Sigs) != len(m.Shares) {
 		return nil, badUp("bad-proupsharedreg-sig-count: %d signatures for %d shares", len(pu.Sigs), len(m.Shares))
 	}
