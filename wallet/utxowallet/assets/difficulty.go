@@ -18,6 +18,8 @@ func init() {
 	btc.NextBits = BitcoinNextBits(btc)
 	ltc := LTCParams["mainnet"]
 	ltc.NextBits = LitecoinNextBits(ltc)
+	dash := DashParams["mainnet"]
+	dash.NextBits = dashNextBits(dash)
 }
 
 // BitcoinNextBits returns the NextBits rule of a chain that retargets every

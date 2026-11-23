@@ -332,9 +332,10 @@ func TestMainnetNextBits(t *testing.T) {
 	}
 }
 
-// TestNextBitsNetworks checks which networks carry a difficulty rule: BTC and
-// LTC mainnet, and no network that allows minimum-difficulty blocks or does
-// not retarget.
+// TestNextBitsNetworks checks which networks carry a difficulty rule: every
+// mainnet, and no network that allows minimum-difficulty blocks. Dash mainnet
+// sets PoWNoRetargeting for the btcd params yet retargets every block; on BTC
+// and LTC the flag marks regtest, which carries no rule.
 func TestNextBitsNetworks(t *testing.T) {
 	for chain, nets := range map[string]map[string]*netparams.ChainParams{
 		"btc":  BTCParams,
@@ -342,11 +343,11 @@ func TestNextBitsNetworks(t *testing.T) {
 		"dash": DashParams,
 	} {
 		for net, p := range nets {
-			want := net == "mainnet" && chain != "dash"
+			want := net == "mainnet"
 			if got := p.NextBits != nil; got != want {
 				t.Errorf("%s %s: NextBits set = %v, want %v", chain, net, got, want)
 			}
-			if p.NextBits != nil && (p.ReduceMinDifficulty || p.PoWNoRetargeting) {
+			if p.NextBits != nil && (p.ReduceMinDifficulty || (chain != "dash" && p.PoWNoRetargeting)) {
 				t.Errorf("%s %s: NextBits set on a network without enforced retargeting", chain, net)
 			}
 		}

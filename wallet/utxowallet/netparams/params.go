@@ -87,9 +87,11 @@ type ChainParams struct {
 	// height, reading the difficulty fields of its ancestors through at, and
 	// false when an input the rule reads is unavailable. Nil disables
 	// contextual difficulty checks. It is nil on every network that permits
-	// minimum-difficulty blocks (ReduceMinDifficulty) or does not retarget
-	// (PoWNoRetargeting), where difficulty does not bound the cost of a forged
-	// chain whatever the client checks.
+	// minimum-difficulty blocks (ReduceMinDifficulty), where difficulty does
+	// not bound the cost of a forged chain whatever the client checks.
+	// PoWNoRetargeting does not imply nil: it only keeps Bitcoin's interval
+	// retarget check out of the btcd params (BTCDParams), and Dash mainnet
+	// sets it while carrying its per-block rule here.
 	NextBits func(height int32, at DifficultyAt) (uint32, bool)
 
 	// DifficultyLookback is the number of blocks below a checkpoint whose

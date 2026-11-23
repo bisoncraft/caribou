@@ -841,8 +841,8 @@ func (h *Headers) validateCheckpoint(height int32, hdr *wire.BlockHeader) error 
 // pass: a rule that cannot be evaluated has not been satisfied. Wrong bits
 // are a *RuleError.
 //
-// Networks whose params carry no NextBits (testnets, regtest, and chains whose
-// rule is not implemented) skip the check.
+// Networks whose params carry no NextBits (testnets and regtest) skip the
+// check.
 //
 // The caller must hold h.mu (read or write).
 func (h *Headers) validateBitsLocked(height int32, hdr *wire.BlockHeader,

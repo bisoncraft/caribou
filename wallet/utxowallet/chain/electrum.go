@@ -1268,7 +1268,7 @@ func (c *ElectrumClient) headersReady(height int32) bool {
 // the header store is synced, every stored header is either authenticated by
 // hash linkage to a checkpoint the store holds, or carries its own PoW check
 // against its declared, range-checked target. Where the chain params install
-// a NextBits rule (BTC and LTC mainnet), that target is also the consensus
+// a NextBits rule (every mainnet), that target is also the consensus
 // difficulty for its height. A proof folding to its merkle root therefore
 // makes fabrication as hard as producing that work; a server that cannot
 // produce a valid proof is lying. Before the store is synced, nothing is
