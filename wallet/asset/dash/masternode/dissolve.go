@@ -392,7 +392,7 @@ func (d *Dissolution) slot(i int) (int, error) {
 }
 
 func (d *Dissolution) hash() (chainhash.Hash, error) {
-	return d.pd.SignHash(&d.tx.MsgTx, uint8(len(d.pd.Sigs)))
+	return d.pd.SignHash(d.tx)
 }
 
 // Sign signs the dissolution as share i with the share's owner key.
