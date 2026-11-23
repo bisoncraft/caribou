@@ -26,6 +26,9 @@ var (
 	versionKey   = []byte("version")
 	// dissolvedBucket holds the proven spends of registered collaterals.
 	dissolvedBucket = []byte("dissolved")
+	// trackedBucket holds the wallet's own registrations and dissolutions that
+	// are not proven yet, by transaction id, as raw transactions.
+	trackedBucket = []byte("tracked")
 )
 
 // storeVersion is the layout of the store. A record format or bucket change
@@ -39,8 +42,9 @@ const legacyVersion = 1
 
 // Store keeps what a shared masternode wallet cannot recompute: the owner
 // index counter, the owner key ids it has derived, how far discovery has
-// scanned, and each registration found, as its raw transaction. Everything else
-// is rebuilt from these and the chain.
+// scanned, each registration found, as its raw transaction, and the wallet's
+// own transactions it is waiting to prove. Everything else is rebuilt from
+// these and the chain.
 type Store struct {
 	db walletdb.DB
 }
@@ -88,7 +92,7 @@ func NewStore(db walletdb.DB) (*Store, error) {
 		if err := checkVersion(v); err != nil {
 			return err
 		}
-		for _, name := range [][]byte{ownersBucket, regsBucket, dissolvedBucket} {
+		for _, name := range [][]byte{ownersBucket, regsBucket, dissolvedBucket, trackedBucket} {
 			if _, err := b.CreateBucketIfNotExists(name); err != nil {
 				return err
 			}
@@ -140,6 +144,8 @@ type Snapshot struct {
 	Registrations map[chainhash.Hash]Registration
 	// Dissolutions are by the proTxHash of a stored registration.
 	Dissolutions map[chainhash.Hash]Spend
+	// Tracked are the raw transactions to prove, by transaction id.
+	Tracked map[chainhash.Hash][]byte
 }
 
 // Update is a change to the store, applied together or not at all.
@@ -168,6 +174,13 @@ type Update struct {
 	// counter, which only grow.
 	Drop             []chainhash.Hash
 	DropDissolutions []chainhash.Hash
+	// Track puts raw transactions to prove: each must be a valid shared
+	// registration or a provider dissolution. Untrack removes tracked ones by
+	// transaction id. A registration saved or a dissolution saved in the same
+	// Update is no longer tracked, and Track is applied after Drop, so a
+	// registration a reorg dropped can be put back to be proven again.
+	Track   [][]byte
+	Untrack []chainhash.Hash
 	// Cursor, if not nil, replaces the scan cursor.
 	Cursor *Cursor
 }
@@ -244,6 +257,32 @@ func decodeRegistration(raw []byte, height int32) (*SharedMN, error) {
 	return RegistrationMN(tx, height)
 }
 
+// trackable checks that raw is a transaction worth proving, a shared
+// registration or a provider dissolution, and returns its id. Whether it is the
+// wallet's is for the caller to say: the store only holds transactions of a
+// kind that a masternode can be built from, so it cannot be filled with others.
+func trackable(raw []byte) (chainhash.Hash, error) {
+	tx, err := decodeTx(raw)
+	if err != nil {
+		return chainhash.Hash{}, fmt.Errorf("tracked transaction: %w", err)
+	}
+	switch tx.Type {
+	case txTypeProReg:
+		// The height only has to be positive: it is not known yet.
+		if _, err := RegistrationMN(tx, 1); err != nil {
+			return chainhash.Hash{}, err
+		}
+	case txTypeProDis:
+		var pd protx.ProDisTx
+		if err := protx.Parse(tx.ExtraPayload, &pd); err != nil {
+			return chainhash.Hash{}, fmt.Errorf("%w: payload: %w", ErrInvalidDissolution, err)
+		}
+	default:
+		return chainhash.Hash{}, fmt.Errorf("tracked transaction: type %d is not a shared registration or dissolution", tx.Type)
+	}
+	return tx.TxHash(), nil
+}
+
 // Save applies u. A registration that is not a valid shared registration fails
 // the whole update, so the store holds only valid ones.
 func (s *Store) Save(u Update) error {
@@ -259,13 +298,22 @@ func (s *Store) Save(u Update) error {
 			shareOwners[m.Shares[j].KeyIDOwner] = struct{}{}
 		}
 	}
+	tracked := make([]chainhash.Hash, len(u.Track))
+	for i, raw := range u.Track {
+		id, err := trackable(raw)
+		if err != nil {
+			return err
+		}
+		tracked[i] = id
+	}
 	return walletdb.Update(s.db, func(tx walletdb.ReadWriteTx) error {
 		b := tx.ReadWriteBucket(storeBucket)
 		if b == nil {
 			return errors.New("masternode store is missing")
 		}
 		owners := b.NestedReadWriteBucket(ownersBucket)
-		if owners == nil || b.NestedReadWriteBucket(regsBucket) == nil || b.NestedReadWriteBucket(dissolvedBucket) == nil {
+		trk := b.NestedReadWriteBucket(trackedBucket)
+		if owners == nil || trk == nil || b.NestedReadWriteBucket(regsBucket) == nil || b.NestedReadWriteBucket(dissolvedBucket) == nil {
 			return errors.New("masternode store is missing a bucket")
 		}
 		for idx, id := range u.OwnerKeyIDs {
@@ -317,8 +365,21 @@ func (s *Store) Save(u Update) error {
 				return err
 			}
 		}
+		for _, h := range u.Untrack {
+			if err := trk.Delete(h[:]); err != nil {
+				return err
+			}
+		}
+		for i, raw := range u.Track {
+			if err := trk.Put(tracked[i][:], raw); err != nil {
+				return err
+			}
+		}
 		for i, r := range u.Registrations {
 			if err := regs.Put(hashes[i][:], regValue(r)); err != nil {
+				return err
+			}
+			if err := trk.Delete(hashes[i][:]); err != nil {
 				return err
 			}
 		}
@@ -330,6 +391,9 @@ func (s *Store) Save(u Update) error {
 			binary.BigEndian.PutUint32(v, uint32(sp.Height))
 			v = append(v, sp.Block[:]...)
 			if err := dis.Put(h[:], append(v, sp.TxID[:]...)); err != nil {
+				return err
+			}
+			if err := trk.Delete(sp.TxID[:]); err != nil {
 				return err
 			}
 		}
@@ -351,6 +415,7 @@ func (s *Store) Load() (Snapshot, error) {
 		OwnerKeyIDs:   make(map[[protx.KeyIDSize]byte]uint32),
 		Registrations: make(map[chainhash.Hash]Registration),
 		Dissolutions:  make(map[chainhash.Hash]Spend),
+		Tracked:       make(map[chainhash.Hash][]byte),
 	}
 	err := walletdb.View(s.db, func(tx walletdb.ReadTx) error {
 		b := tx.ReadBucket(storeBucket)
@@ -364,7 +429,7 @@ func (s *Store) Load() (Snapshot, error) {
 		if err := checkVersion(v); err != nil {
 			return err
 		}
-		for _, name := range [][]byte{ownersBucket, regsBucket, dissolvedBucket} {
+		for _, name := range [][]byte{ownersBucket, regsBucket, dissolvedBucket, trackedBucket} {
 			if b.NestedReadBucket(name) == nil {
 				return errors.New("masternode store is missing a bucket")
 			}
@@ -406,6 +471,18 @@ func (s *Store) Load() (Snapshot, error) {
 			}
 			copy(r.Block[:], v[4:36])
 			snap.Registrations[h] = r
+			return nil
+		})
+		if err != nil {
+			return err
+		}
+		err = b.NestedReadBucket(trackedBucket).ForEach(func(k, v []byte) error {
+			if len(k) != chainhash.HashSize || len(v) == 0 {
+				return errors.New("malformed tracked record")
+			}
+			var h chainhash.Hash
+			copy(h[:], k)
+			snap.Tracked[h] = bytes.Clone(v)
 			return nil
 		})
 		if err != nil {
