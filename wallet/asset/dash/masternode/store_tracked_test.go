@@ -135,3 +135,51 @@ func TestStoreLoadRefusesMalformedTracked(t *testing.T) {
 		t.Fatalf("clean store: %v", err)
 	}
 }
+
+// A spend keeps its raw transaction, so a reorg that undoes its block can be
+// followed by proving it again, and a transaction that is not the spend is
+// refused.
+func TestStoreSpendKeepsItsTransaction(t *testing.T) {
+	e := newEnv(t)
+	rawB, rawD := rawTx(t, e.txB), rawTx(t, e.txD)
+	spend := Spend{Height: heightD, Block: chainhash.Hash{3}, TxID: e.hashD, Tx: rawD}
+	err := e.store.Save(Update{
+		Registrations: []Registration{{Height: heightB, Tx: rawB}},
+		Dissolutions:  map[chainhash.Hash]Spend{e.b.ProTxHash: spend},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := e.snapshot().Dissolutions[e.b.ProTxHash]
+	if !bytes.Equal(got.Tx, rawD) || got.TxID != e.hashD || got.Height != heightD || got.Block != spend.Block {
+		t.Fatalf("%+v", got)
+	}
+
+	// Another transaction, or bytes that are not a dissolution, are refused.
+	for name, tx := range map[string][]byte{
+		"another transaction": rawTx(t, e.txA),
+		"garbage":             {1, 2, 3},
+	} {
+		bad := spend
+		bad.Tx = tx
+		err := e.store.Save(Update{Dissolutions: map[chainhash.Hash]Spend{e.b.ProTxHash: bad}})
+		if err == nil {
+			t.Errorf("%s: saved", name)
+		}
+	}
+	if !bytes.Equal(e.snapshot().Dissolutions[e.b.ProTxHash].Tx, rawD) {
+		t.Fatal("a refused update changed the spend")
+	}
+
+	// A record without a transaction, as an earlier version wrote, still loads.
+	err = walletdb.Update(e.db, func(tx walletdb.ReadWriteTx) error {
+		v := make([]byte, 68)
+		return tx.ReadWriteBucket(storeBucket).NestedReadWriteBucket(dissolvedBucket).Put(e.b.ProTxHash[:], v)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := e.snapshot().Dissolutions[e.b.ProTxHash]; got.Tx != nil {
+		t.Fatalf("%+v", got)
+	}
+}

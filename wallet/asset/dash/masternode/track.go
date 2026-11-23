@@ -40,8 +40,9 @@ import (
 //
 // A registration is kept only if one of its share owner keys is the wallet's,
 // which may derive keys, so it can fail on a locked wallet that has not cached
-// them; any other is ErrNotOurs. A dissolution is kept for Refresh to match to
-// a masternode, and dropped there if it is not one's.
+// them; any other is ErrNotOurs. A dissolution is kept until Refresh proves it
+// as the spend of a masternode of the wallet's, and stays tracked until then:
+// Untrack removes one that is not wanted.
 func (m *Manager) Track(raw []byte, height int32) error {
 	id, err := trackable(raw)
 	if err != nil {
@@ -127,8 +128,10 @@ func (m *Manager) Untrack(id chainhash.Hash) error {
 // tracked again and proven by the block it is in now. A dissolution whose block
 // is gone is found again in the history of the refund scripts, or tracked with Track.
 //
-// A tracked transaction that cannot be proven yet stays tracked, and the error
-// of the first is returned once the rest is saved.
+// A tracked transaction that cannot be proven yet stays tracked. Every error is
+// returned, joined, once what could be proven is saved. A transaction below the
+// headers cannot be proven ever, and is reported once, as ErrUnprovable, and
+// no longer tracked.
 func (m *Manager) Refresh(ctx context.Context) error {
 	m.syncMu.Lock()
 	defer m.syncMu.Unlock()
@@ -234,10 +237,12 @@ func (m *Manager) Refresh(ctx context.Context) error {
 			case errors.Is(err, errBelowHeaders):
 				unprovable++
 				up.Untrack = append(up.Untrack, c.txid)
+				// Reported once: a refund history lists it again.
+				m.seen[c.txid] = struct{}{}
 			case err != nil:
 				errs = append(errs, err)
 			case ok:
-				up.Dissolutions[h] = Spend{Height: height, Block: block, TxID: c.txid}
+				up.Dissolutions[h] = Spend{Height: height, Block: block, TxID: c.txid, Tx: c.raw}
 			}
 		}
 	}
@@ -252,24 +257,30 @@ func (m *Manager) Refresh(ctx context.Context) error {
 	if err := m.install(after); err != nil {
 		return err
 	}
+	// A hint has done its work once the transaction is proven or given up.
+	m.mu.Lock()
 	for _, id := range up.Untrack {
-		m.mu.Lock()
 		delete(m.hints, id)
-		m.mu.Unlock()
 	}
-	if len(errs) > 0 {
-		return errors.Join(errs...)
+	for _, r := range up.Registrations {
+		if tx, err := decodeTx(r.Tx); err == nil {
+			delete(m.hints, tx.TxHash())
+		}
 	}
+	for _, sp := range up.Dissolutions {
+		delete(m.hints, sp.TxID)
+	}
+	m.mu.Unlock()
 	if unprovable > 0 {
-		return fmt.Errorf("%w: %d skipped", ErrUnprovable, unprovable)
+		errs = append(errs, fmt.Errorf("%w: %d skipped and no longer tracked", ErrUnprovable, unprovable))
 	}
-	return nil
+	return errors.Join(errs...)
 }
 
 // refundHistory reads the history of the refund script of every share of the
 // wallet's in mns, and returns the transactions in it that spend a collateral
-// of mns. A transaction that does not is remembered, as what it spends cannot
-// change. Entries that are not mined, or are above the headers, are left for a
+// of mns. A transaction that is not a dissolution is remembered, as what it
+// spends cannot change. Entries that are not mined, or are above the headers, are left for a
 // later Refresh. known are the transactions already stored.
 func (m *Manager) refundHistory(ctx context.Context, mns map[chainhash.Hash]*SharedMN, owned map[[protx.KeyIDSize]byte]uint32, known map[chainhash.Hash]struct{}, tip int32) ([]*candidate, error) {
 	// A dissolution is after every registration it dissolves.
@@ -341,7 +352,12 @@ func (m *Manager) refundHistory(ctx context.Context, mns map[chainhash.Hash]*Sha
 				}
 			}
 			if !spends {
-				m.seen[*id] = struct{}{}
+				// Only a dissolution can spend a shared collateral, and one may
+				// belong to a masternode that is not held yet, so only what is
+				// not one is remembered.
+				if tx.Type != txTypeProDis {
+					m.seen[*id] = struct{}{}
+				}
 				continue
 			}
 			cands = append(cands, &candidate{height: e.Height, txid: *id, raw: raw, tx: tx})
@@ -357,16 +373,17 @@ var errBelowHeaders = errors.New("transaction is below the chain's headers")
 // proveMined finds the block that holds the transaction and proves it by a
 // merkle proof against the header the chain holds. found is false if it is not
 // mined, or its block is not among the headers yet, and then it is looked for
-// again. The height Track was given is tried first. Otherwise the server says
-// which block, which is its word and only says where to ask: the proof decides.
+// again. The height Track was given is tried first, unless it is below the
+// headers, where nothing can be proven. Otherwise the server says which block,
+// which is its word and only says where to ask: the proof decides. A block the
+// chain has no header for is below its headers if the server's confirmations
+// say so, and is errBelowHeaders.
 func (m *Manager) proveMined(ctx context.Context, id chainhash.Hash, raw []byte, tip int32) (int32, chainhash.Hash, bool, error) {
 	m.mu.RLock()
 	hint := m.hints[id]
 	m.mu.RUnlock()
-	if hint > 0 && hint <= tip {
-		if hint < m.chain.StartHeight() {
-			return 0, chainhash.Hash{}, false, errBelowHeaders
-		}
+	start := m.chain.StartHeight()
+	if hint >= start && hint > 0 && hint <= tip {
 		if block, err := m.prove(ctx, id, raw, hint); err == nil {
 			return hint, block, true, nil
 		}
@@ -383,7 +400,15 @@ func (m *Manager) proveMined(ctx context.Context, id chainhash.Hash, raw []byte,
 		return 0, chainhash.Hash{}, false, fmt.Errorf("transaction %s: block hash %q: %w", id, v.BlockHash, err)
 	}
 	height, _, ok := m.chain.HeaderByHash(bh)
-	if !ok || height > tip {
+	if !ok {
+		// The chain has no header for the block: it is below the headers it
+		// holds, which the confirmations say, or it is not synced to it yet.
+		if v.Confirmations > 0 && int64(tip)-int64(v.Confirmations)+1 < int64(start) {
+			return 0, chainhash.Hash{}, false, errBelowHeaders
+		}
+		return 0, chainhash.Hash{}, false, nil
+	}
+	if height > tip {
 		return 0, chainhash.Hash{}, false, nil
 	}
 	block, err := m.prove(ctx, id, raw, height)

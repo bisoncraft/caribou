@@ -6,6 +6,7 @@ package masternode
 
 import (
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
@@ -190,7 +191,7 @@ func TestTrackTxID(t *testing.T) {
 	// The bytes must be the transaction with that id, and a server that has
 	// none cannot make the wallet track one.
 	e2 := newEnv(t)
-	e2.own(map[uint32][20]byte{1: e2.idA}, 0)
+	e2.own(map[uint32][20]byte{1: e2.idA, 2: e2.idB}, 0) // B's bytes would be taken
 	m2 := e2.manager()
 	e2.chain.raws[e2.a.ProTxHash.String()] = e2.rawHex(e2.txB)
 	if err := m2.TrackTxID(t.Context(), e2.a.ProTxHash); err == nil {
@@ -266,21 +267,84 @@ func TestTrackOfAKnownTransactionIsUntracked(t *testing.T) {
 	}
 }
 
+// A block below the headers the chain holds cannot be proven, which the server
+// says by its confirmations: it is reported once, with whatever else went
+// wrong, and not waited for.
 func TestTrackBelowTheHeadersIsReported(t *testing.T) {
 	e, m := trackedEnv(t)
+	e.chain.start = heightA + 1
+	delete(e.chain.headers, heightA)
+
+	// Another transaction fails for its own reason in the same Refresh.
+	if err := m.Track(rawTx(t, e.txB), 0); err != nil {
+		t.Fatal(err)
+	}
+	e.chain.blocks[e.b.ProTxHash.String()] = e.chain.headers[heightD].BlockHash().String()
+
+	err := m.Refresh(t.Context())
+	if !errors.Is(err, ErrUnprovable) {
+		t.Fatalf("the unprovable one is not reported: %v", err)
+	}
+	if err == nil || len(err.Error()) == len(ErrUnprovable.Error()) {
+		t.Fatalf("the other error is hidden: %v", err)
+	}
+	snap := e.snapshot()
+	if snap.Tracked[e.a.ProTxHash] != nil || snap.Tracked[e.b.ProTxHash] == nil {
+		t.Fatalf("tracked %d", len(snap.Tracked))
+	}
+
+	delete(e.chain.blocks, e.b.ProTxHash.String())
+	if err := m.Refresh(t.Context()); err != nil {
+		t.Fatalf("reported again: %v", err)
+	}
+}
+
+// A height from the caller that is below the headers is not believed: the
+// server is asked, and the proof decides, so a wrong one does not lose the
+// registration.
+func TestTrackLowHintIsOnlyAHint(t *testing.T) {
+	e := newEnv(t)
+	e.own(map[uint32][20]byte{1: e.idA}, 0)
+	e.chain.start = heightA - 10
+	m := e.manager()
+	if err := m.Track(rawTx(t, e.txA), heightA-100); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Refresh(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if m.StakedAmount() != e.a.Shares[0].Amount || len(e.snapshot().Tracked) != 0 {
+		t.Fatalf("a low hint lost the registration: staked %d", m.StakedAmount())
+	}
+}
+
+// A hint is dropped once it has been used.
+func TestTrackHintIsForgottenOnceProven(t *testing.T) {
+	e := newEnv(t)
+	e.own(map[uint32][20]byte{1: e.idA}, 0)
+	m := e.manager()
 	if err := m.Track(rawTx(t, e.txA), heightA); err != nil {
 		t.Fatal(err)
 	}
-	e.chain.start = heightA + 1
-	if err := m.Refresh(t.Context()); !errors.Is(err, ErrUnprovable) {
-		t.Fatalf("%v", err)
-	}
-	// It is reported once and not waited for.
-	if len(e.snapshot().Tracked) != 0 {
-		t.Fatal("still tracked")
-	}
 	if err := m.Refresh(t.Context()); err != nil {
-		t.Fatalf("reported again: %v", err)
+		t.Fatal(err)
+	}
+	if len(m.hints) != 0 {
+		t.Fatalf("%d hints are kept", len(m.hints))
+	}
+}
+
+// A block above the tip the chain has is not taken: it is read once the chain
+// has caught up.
+func TestTrackWaitsForAnAdvancedServer(t *testing.T) {
+	e, m := trackedEnv(t)
+	e.chain.tip = heightA - 1
+	e.chain.headers[heightA-1] = synthHeader(chainhash.Hash{}, heightA-1)
+	if err := m.Refresh(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if m.StakedAmount() != 0 || len(e.snapshot().Tracked) != 1 {
+		t.Fatal("proved a block above the tip")
 	}
 }
 
@@ -567,5 +631,140 @@ func TestDiscoverReportsAServerThatRefuses(t *testing.T) {
 	}
 	if err := m.Refresh(t.Context()); err != nil || m.StakedAmount() == 0 {
 		t.Fatalf("%v, staked %d", err, m.StakedAmount())
+	}
+}
+
+// A dissolution the wallet tracked, which its refund scripts do not show, is
+// proven again by the block it is in after a reorg.
+func TestTrackedDissolutionSurvivesAReorg(t *testing.T) {
+	setup := func(t *testing.T) (*env, *Manager) {
+		e := newEnv(t)
+		e.own(map[uint32][20]byte{2: e.idB}, 0)
+		m := e.manager()
+		for _, tx := range [][]byte{rawTx(t, e.txB), rawTx(t, e.txD)} {
+			if err := m.Track(tx, 0); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := m.Refresh(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := m.SharedMN(t.Context(), e.b.ProTxHash, false); !errors.Is(err, ErrDissolved) {
+			t.Fatalf("setup: %v", err)
+		}
+		return e, m
+	}
+	movedD := func(e *env) {
+		e.chain.headers[heightD] = synthHeader(e.hashD, heightD)
+		e.chain.headers[heightD].Nonce++
+		e.chain.blocks[e.hashD.String()] = e.chain.headers[heightD].BlockHash().String()
+	}
+
+	t.Run("its block is replaced", func(t *testing.T) {
+		e, m := setup(t)
+		movedD(e)
+		if err := m.Refresh(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := m.SharedMN(t.Context(), e.b.ProTxHash, false); !errors.Is(err, ErrDissolved) || m.StakedAmount() != 0 {
+			t.Fatalf("the masternode is live again: %v", err)
+		}
+		sp := e.snapshot().Dissolutions[e.b.ProTxHash]
+		if sp.Block != e.chain.headers[heightD].BlockHash() {
+			t.Fatalf("%+v", sp)
+		}
+	})
+	t.Run("its registration's block is replaced", func(t *testing.T) {
+		e, m := setup(t)
+		e.chain.headers[heightB] = synthHeader(e.b.ProTxHash, heightB)
+		e.chain.headers[heightB].Nonce++
+		e.chain.blocks[e.b.ProTxHash.String()] = e.chain.headers[heightB].BlockHash().String()
+		if err := m.Refresh(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := m.SharedMN(t.Context(), e.b.ProTxHash, false); !errors.Is(err, ErrDissolved) {
+			t.Fatalf("the masternode is live again: %v", err)
+		}
+	})
+	t.Run("not mined for now", func(t *testing.T) {
+		e, m := setup(t)
+		e.chain.headers[heightD] = synthHeader(chainhash.Hash{8}, heightD)
+		delete(e.chain.blocks, e.hashD.String())
+		if err := m.Refresh(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+		if m.StakedAmount() == 0 {
+			t.Fatal("dissolved by a spend that is not mined")
+		}
+		if e.snapshot().Tracked[e.hashD] == nil {
+			t.Fatal("the dissolution is not tracked again")
+		}
+		movedD(e)
+		if err := m.Refresh(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := m.SharedMN(t.Context(), e.b.ProTxHash, false); !errors.Is(err, ErrDissolved) {
+			t.Fatalf("%v", err)
+		}
+	})
+}
+
+// A transaction in a refund history that dissolves a masternode that is not
+// proven yet is not forgotten, so the masternode is dissolved once it is.
+func TestRefreshDoesNotForgetADissolutionOfALaterMasternode(t *testing.T) {
+	e := newEnv(t)
+	e.own(map[uint32][20]byte{1: e.idA, 2: e.idB}, 0)
+	m := e.manager()
+	for _, tx := range [][]byte{rawTx(t, e.txA), rawTx(t, e.txB)} {
+		if err := m.Track(tx, 0); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// B is not mined yet. D dissolves B and is in A's refund history, listed
+	// after A's registration as a dissolution of A's would be.
+	delete(e.chain.blocks, e.b.ProTxHash.String())
+	e.refundHistory(e.a, 0, entry(heightA+1, e.hashD))
+	if err := m.Refresh(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if m.StakedAmount() != e.a.Shares[0].Amount {
+		t.Fatalf("staked %d", m.StakedAmount())
+	}
+
+	e.chain.blocks[e.b.ProTxHash.String()] = e.chain.headers[heightB].BlockHash().String()
+	if err := m.Refresh(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.SharedMN(t.Context(), e.b.ProTxHash, false); !errors.Is(err, ErrDissolved) {
+		t.Fatalf("B is live: %v", err)
+	}
+}
+
+// What a server serves for an entry of a history is checked to be that
+// transaction: bytes that spend a collateral, paired with the id of a mined
+// transaction, would otherwise dissolve a masternode that nothing dissolved.
+func TestRefreshRefusesBytesThatAreNotTheTransaction(t *testing.T) {
+	e := newEnv(t)
+	e.own(map[uint32][20]byte{2: e.idB}, 0)
+	m := e.manager()
+	if err := m.Track(rawTx(t, e.txB), 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Refresh(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	// Another transaction that spends B's collateral, served for D's id.
+	forged := *e.txD
+	forged.LockTime++
+	if forged.TxHash() == e.hashD || !e.b.SpendsCollateral(&forged) {
+		t.Fatal("not a forgery")
+	}
+	e.chain.raws[e.hashD.String()] = e.rawHex(&forged)
+	e.refundHistory(e.b, 0, entry(heightD, e.hashD))
+	if err := m.Refresh(t.Context()); err == nil || !strings.Contains(err.Error(), "is served as") {
+		t.Fatalf("served bytes that are not the transaction: %v", err)
+	}
+	if m.StakedAmount() == 0 {
+		t.Fatal("dissolved by a forgery")
 	}
 }

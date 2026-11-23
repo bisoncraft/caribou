@@ -44,6 +44,8 @@ type fakeChain struct {
 	// by transaction id, and refund is the history of other scripts, by
 	// scripthash.
 	blocks map[string]string
+	// confs are the confirmations the server reports of a mined transaction.
+	confs  map[string]int32
 	refund map[string][]electrum.HistoryEntry
 	// sharedErr is returned for the history of the shared collateral script.
 	sharedErr error
@@ -101,7 +103,7 @@ func (f *fakeChain) GetTransactionVerbose(_ context.Context, txid string) (*elec
 	if f.verboseErr != nil {
 		return nil, f.verboseErr
 	}
-	return &electrum.VerboseTx{TxID: txid, BlockHash: f.blocks[txid]}, nil
+	return &electrum.VerboseTx{TxID: txid, BlockHash: f.blocks[txid], Confirmations: f.confs[txid]}, nil
 }
 
 func (f *fakeChain) HeaderByHash(hash *chainhash.Hash) (int32, *wire.BlockHeader, bool) {
@@ -221,6 +223,7 @@ func newEnv(t *testing.T) *env {
 		headers:     map[int32]*wire.BlockHeader{},
 		raws:        map[string]string{},
 		blocks:      map[string]string{},
+		confs:       map[string]int32{},
 		refund:      map[string][]electrum.HistoryEntry{},
 		proofs:      map[string]*electrum.MerkleProof{},
 		rawCalls:    map[string]int{},
@@ -250,6 +253,7 @@ func newEnv(t *testing.T) *env {
 	f.proofs[idA] = &electrum.MerkleProof{BlockHeight: real.BlockHeight, Merkle: real.Merkle, Pos: real.Pos}
 	f.raws[idA] = e.rawHex(e.txA)
 	f.blocks[idA] = hdr.BlockHash().String()
+	f.confs[idA] = tipHeight - heightA + 1
 	f.history = append(f.history, electrum.HistoryEntry{Height: heightA, TxHash: idA})
 
 	e.addSynth(e.txB, heightB)
@@ -269,6 +273,7 @@ func (e *env) addSynth(tx *bisonwire.Tx, height int32) {
 	e.chain.headers[height] = synthHeader(id, height)
 	e.chain.proofs[s] = &electrum.MerkleProof{BlockHeight: height}
 	e.chain.blocks[s] = e.chain.headers[height].BlockHash().String()
+	e.chain.confs[s] = e.chain.tip - height + 1
 	e.chain.raws[s] = e.rawHex(tx)
 	e.chain.history = append(e.chain.history, electrum.HistoryEntry{Height: height, TxHash: s})
 }

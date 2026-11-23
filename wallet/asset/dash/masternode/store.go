@@ -127,11 +127,16 @@ type Registration struct {
 }
 
 // Spend is the proven spend of a registered collateral: the height of the
-// block that holds it, that block's fingerprint and its transaction id.
+// block that holds it, that block's fingerprint and its transaction id. Tx is
+// the raw transaction, so a spend whose block a reorg undoes can be proven
+// again by the block it is in next: the refund scripts that find a dissolution
+// do not show one the wallet's own actor made without paying itself. It may be
+// empty, and then there is nothing to prove again.
 type Spend struct {
 	Height int32
 	Block  chainhash.Hash
 	TxID   chainhash.Hash
+	Tx     []byte
 }
 
 // Snapshot is everything in the store.
@@ -298,6 +303,18 @@ func (s *Store) Save(u Update) error {
 			shareOwners[m.Shares[j].KeyIDOwner] = struct{}{}
 		}
 	}
+	for h, sp := range u.Dissolutions {
+		if len(sp.Tx) == 0 {
+			continue
+		}
+		id, err := trackable(sp.Tx)
+		if err != nil {
+			return fmt.Errorf("dissolution of %s: %w", h, err)
+		}
+		if id != sp.TxID {
+			return fmt.Errorf("dissolution of %s: transaction is %s, not %s", h, id, sp.TxID)
+		}
+	}
 	tracked := make([]chainhash.Hash, len(u.Track))
 	for i, raw := range u.Track {
 		id, err := trackable(raw)
@@ -387,10 +404,11 @@ func (s *Store) Save(u Update) error {
 			if regs.Get(h[:]) == nil {
 				return errors.New("dissolution of an unknown registration")
 			}
-			v := make([]byte, 4, 68)
+			v := make([]byte, 4, 68+len(sp.Tx))
 			binary.BigEndian.PutUint32(v, uint32(sp.Height))
 			v = append(v, sp.Block[:]...)
-			if err := dis.Put(h[:], append(v, sp.TxID[:]...)); err != nil {
+			v = append(v, sp.TxID[:]...)
+			if err := dis.Put(h[:], append(v, sp.Tx...)); err != nil {
 				return err
 			}
 			if err := trk.Delete(sp.TxID[:]); err != nil {
@@ -489,7 +507,7 @@ func (s *Store) Load() (Snapshot, error) {
 			return err
 		}
 		return b.NestedReadBucket(dissolvedBucket).ForEach(func(k, v []byte) error {
-			if len(k) != chainhash.HashSize || len(v) != 68 {
+			if len(k) != chainhash.HashSize || len(v) < 68 {
 				return errors.New("malformed dissolution record")
 			}
 			var h chainhash.Hash
@@ -499,7 +517,10 @@ func (s *Store) Load() (Snapshot, error) {
 			}
 			sp := Spend{Height: int32(binary.BigEndian.Uint32(v))}
 			copy(sp.Block[:], v[4:36])
-			copy(sp.TxID[:], v[36:])
+			copy(sp.TxID[:], v[36:68])
+			if len(v) > 68 {
+				sp.Tx = bytes.Clone(v[68:])
+			}
 			snap.Dissolutions[h] = sp
 			return nil
 		})

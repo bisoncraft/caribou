@@ -28,7 +28,7 @@ func TestStoreDrop(t *testing.T) {
 		t.Fatal(err)
 	}
 	s := e.snapshot()
-	if len(s.Registrations) != 1 || s.Dissolutions[e.a.ProTxHash] != want || s.NextOwner != 4 ||
+	if got := s.Dissolutions[e.a.ProTxHash]; len(s.Registrations) != 1 || got.Height != want.Height || got.Block != want.Block || got.TxID != want.TxID || got.Tx != nil || s.NextOwner != 4 ||
 		s.Registrations[e.a.ProTxHash].Block != (chainhash.Hash{4}) {
 		t.Fatalf("%+v", s)
 	}

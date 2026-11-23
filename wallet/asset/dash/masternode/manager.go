@@ -38,9 +38,9 @@ var (
 	// ErrDissolved is returned for a masternode whose collateral a mined
 	// transaction has spent.
 	ErrDissolved = errors.New("shared masternode is dissolved")
-	// ErrUnprovable is returned by a scan that finished but skipped a
-	// transaction of the wallet's that is below the headers the chain holds, so
-	// it cannot be proven. What the scan proved is saved.
+	// ErrUnprovable is returned by a Discover or Refresh that finished but
+	// skipped a transaction of the wallet's that is below the headers the chain
+	// holds, so it cannot be proven. What it proved is saved.
 	ErrUnprovable = errors.New("transaction below the chain's headers cannot be proven")
 	// ErrSharedHistory is returned by Discover when the server will not give
 	// the history of the shared collateral script, which every shared
@@ -225,8 +225,8 @@ func (m *Manager) unchanged(height int32, block chainhash.Hash) bool {
 
 // reconcile keeps what is stored while its block is in the chain: a
 // registration whose block is gone is dropped with its spend, and a spend whose
-// block is gone alone. A dropped registration is tracked again, to be proven
-// by the block it is in now. It returns the masternodes that stay and the
+// block is gone alone. What is dropped is tracked again, to be proven by the
+// block it is in now. It returns the masternodes that stay and the
 // transaction ids that are already known.
 func (m *Manager) reconcile(snap Snapshot, stored map[chainhash.Hash]*SharedMN, up *Update) (map[chainhash.Hash]*SharedMN, map[chainhash.Hash]struct{}) {
 	live := make(map[chainhash.Hash]*SharedMN)
@@ -236,6 +236,10 @@ func (m *Manager) reconcile(snap Snapshot, stored map[chainhash.Hash]*SharedMN, 
 		if !m.unchanged(r.Height, r.Block) {
 			up.Drop = append(up.Drop, h)
 			up.Track = append(up.Track, r.Tx)
+			// Its spend goes with it, and is proven again with it.
+			if sp, ok := snap.Dissolutions[h]; ok && len(sp.Tx) > 0 {
+				up.Track = append(up.Track, sp.Tx)
+			}
 			continue
 		}
 		live[h] = mn
@@ -243,6 +247,9 @@ func (m *Manager) reconcile(snap Snapshot, stored map[chainhash.Hash]*SharedMN, 
 		if sp, ok := snap.Dissolutions[h]; ok {
 			if !m.unchanged(sp.Height, sp.Block) {
 				up.DropDissolutions = append(up.DropDissolutions, h)
+				if len(sp.Tx) > 0 {
+					up.Track = append(up.Track, sp.Tx)
+				}
 				continue
 			}
 			up.Dissolutions[h] = sp
@@ -384,7 +391,7 @@ func (m *Manager) Discover(ctx context.Context) error {
 			if err != nil {
 				return err
 			}
-			up.Dissolutions[h] = Spend{Height: c.height, Block: block, TxID: c.txid}
+			up.Dissolutions[h] = Spend{Height: c.height, Block: block, TxID: c.txid, Tx: c.raw}
 		}
 	}
 	if err := m.store.Save(up); err != nil {
