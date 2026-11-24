@@ -342,7 +342,8 @@ func TestTrackIsNotGivenUpOnTheServersWord(t *testing.T) {
 // spent, is not an error on every block, and is asked for only now and then.
 func TestTrackOfAnUnknownTransactionIsQuiet(t *testing.T) {
 	e, m := trackedEnv(t)
-	e.chain.verboseErr = electrum.RPCError{Code: -5, Message: "No such mempool or blockchain transaction"}
+	// As ElectrumX passes the daemon's error on, and as the client returns it.
+	e.chain.verboseErr = &electrum.RPCError{Code: 2, Message: "daemon error: DaemonError({'code': -5, 'message': 'No such mempool or blockchain transaction. Use gettransaction for wallet transactions.'})"}
 	for range 3 {
 		if err := m.Refresh(t.Context()); err != nil {
 			t.Fatalf("%v", err)
@@ -904,5 +905,95 @@ func TestIdleTrackedDissolutionIsUntracked(t *testing.T) {
 	_ = m.Refresh(t.Context())
 	if len(e.snapshot().Tracked) != 0 {
 		t.Fatal("an idle dissolution is still tracked")
+	}
+}
+
+// A refund script the server will not give is not asked for on every block, and
+// does not make every Refresh read the rest again.
+func TestRefundScriptThatFailsIsBackedOff(t *testing.T) {
+	e := newEnv(t)
+	e.own(map[uint32][20]byte{2: e.idB}, 0)
+	if len(e.b.Shares) < 2 {
+		t.Skip("the masternode has one share")
+	}
+	m := e.manager()
+	if err := m.Track(rawTx(t, e.txB), 0); err != nil {
+		t.Fatal(err)
+	}
+	bad := scriptHash(e.b.Shares[0].RefundScript)
+	e.chain.refundErr = map[string]error{bad: errors.New("history too large")}
+	if err := m.Refresh(t.Context()); err == nil {
+		t.Fatal("the failure is hidden")
+	}
+	e.chain.histTotal = 0
+	for range 5 {
+		if err := m.Refresh(t.Context()); err != nil {
+			t.Fatalf("%v", err)
+		}
+	}
+	if e.chain.histTotal != 0 {
+		t.Fatalf("read %d histories again at the same height", e.chain.histTotal)
+	}
+	// Only the script that failed waits: the rest are read on the next read.
+	e.later()
+	if err := m.Refresh(t.Context()); err != nil {
+		t.Fatalf("%v", err)
+	}
+	if e.chain.histTotal != len(e.b.Shares)-1 {
+		t.Fatalf("read %d histories, want %d", e.chain.histTotal, len(e.b.Shares)-1)
+	}
+}
+
+// A masternode proven after the last read is read at once, not when the next is
+// due, so a dissolution that is already mined is not missed for ten blocks.
+func TestRefundIsReadAtOnceForANewMasternode(t *testing.T) {
+	e := newEnv(t)
+	e.own(map[uint32][20]byte{1: e.idA, 2: e.idB}, 0)
+	m := e.manager()
+	if err := m.Track(rawTx(t, e.txA), 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Refresh(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	e.refundHistory(e.b, 0, entry(heightD, e.hashD))
+	if err := m.Track(rawTx(t, e.txB), 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Refresh(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.SharedMN(t.Context(), e.b.ProTxHash, false); !errors.Is(err, ErrDissolved) {
+		t.Fatalf("a dissolution of a masternode proven just now waits: %v", err)
+	}
+}
+
+// A registration whose block was reorged out and that is never mined again is
+// tried at its old height once, not on every block.
+func TestReorgedHintIsTriedOnce(t *testing.T) {
+	e := newEnv(t)
+	e.own(map[uint32][20]byte{1: e.idA}, 0)
+	m := e.manager()
+	if err := m.Track(rawTx(t, e.txA), 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Refresh(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	id := e.a.ProTxHash.String()
+	// The block is replaced, and the server no longer knows the transaction.
+	e.chain.headers[heightA] = synthHeader(chainhash.Hash{9}, heightA)
+	e.chain.verboseErr = &electrum.RPCError{Code: 2, Message: "No such mempool or blockchain transaction"}
+	if err := m.Refresh(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	before := e.chain.merkleCalls[id]
+	for range 5 {
+		if err := m.Refresh(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := e.chain.merkleCalls[id]; got != before {
+		t.Fatalf("%d more merkle requests for a registration that is not mined", got-before)
 	}
 }

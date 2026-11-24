@@ -115,6 +115,10 @@ type Manager struct {
 	idle  map[chainhash.Hash]int
 	// refundAt is the height the refund scripts were last read at.
 	refundAt int32
+	// refundSeen are the masternodes the last read was of, and refundFailed the
+	// height each refund script that a server would not give failed at.
+	refundSeen   map[chainhash.Hash]struct{}
+	refundFailed map[string]int32
 }
 
 // hint remembers the height a transaction was in, to try first.
@@ -129,7 +133,7 @@ func NewManager(chain Chain, store *Store, keys KeyDeriver, coinType uint32, net
 	m := &Manager{
 		chain: chain, store: store, keys: keys, coinType: coinType, net: net,
 		hints: make(map[chainhash.Hash]int32), seen: make(map[chainhash.Hash]struct{}),
-		asked: make(map[chainhash.Hash]int32), idle: make(map[chainhash.Hash]int),
+		asked: make(map[chainhash.Hash]int32), refundSeen: make(map[chainhash.Hash]struct{}), refundFailed: make(map[string]int32), idle: make(map[chainhash.Hash]int),
 	}
 	snap, err := store.Load()
 	if err != nil {

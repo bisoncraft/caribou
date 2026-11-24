@@ -305,7 +305,15 @@ func (m *Manager) refundHistory(ctx context.Context, mns map[chainhash.Hash]*Sha
 	// of all the shares has every dissolution, including one that the wallet's
 	// share is the actor of and pays itself nothing.
 	scripts := make(map[string]struct{})
-	if tip-m.refundAt < refundEvery {
+	// A masternode that was not held at the last read is read at once, not
+	// when the next read is due.
+	fresh := false
+	for h := range mns {
+		if _, ok := m.refundSeen[h]; !ok {
+			fresh = true
+		}
+	}
+	if tip-m.refundAt < refundEvery && !fresh {
 		return nil, nil
 	}
 	minHeight := int32(0)
@@ -317,7 +325,14 @@ func (m *Manager) refundHistory(ctx context.Context, mns map[chainhash.Hash]*Sha
 			}
 		}
 	}
+	if len(scripts) == 0 {
+		return nil, nil
+	}
 	m.refundAt = tip
+	m.refundSeen = make(map[chainhash.Hash]struct{}, len(mns))
+	for h := range mns {
+		m.refundSeen[h] = struct{}{}
+	}
 	hashes := make([]string, 0, len(scripts))
 	for sh := range scripts {
 		hashes = append(hashes, sh)
@@ -328,14 +343,20 @@ func (m *Manager) refundHistory(ctx context.Context, mns map[chainhash.Hash]*Sha
 	var errs []error
 	listed := make(map[chainhash.Hash]struct{})
 	for _, sh := range hashes {
+		// A script that a server would not give, such as one that is too busy,
+		// is not asked for again for a while.
+		if last, ok := m.refundFailed[sh]; ok && tip-last < refundBackoff {
+			continue
+		}
 		history, err := m.chain.GetHistory(ctx, sh)
 		if err != nil {
 			// The others are still read: one script that a server will not
 			// give does not hide the rest.
 			errs = append(errs, fmt.Errorf("refund script history: %w", err))
-			m.refundAt = 0
+			m.refundFailed[sh] = tip
 			continue
 		}
+		delete(m.refundFailed, sh)
 		for _, e := range history {
 			if e.Height <= 0 || e.Height > tip || e.Height < minHeight {
 				continue
@@ -358,19 +379,16 @@ func (m *Manager) refundHistory(ctx context.Context, mns map[chainhash.Hash]*Sha
 			rawHex, err := m.chain.GetRawTransaction(ctx, e.TxHash)
 			if err != nil {
 				errs = append(errs, fmt.Errorf("transaction %s: %w", e.TxHash, err))
-				m.refundAt = 0
 				continue
 			}
 			raw, err := hex.DecodeString(rawHex)
 			if err != nil {
 				errs = append(errs, fmt.Errorf("transaction %s: %w", e.TxHash, err))
-				m.refundAt = 0
 				continue
 			}
 			tx, err := decodeTx(raw)
 			if err != nil {
 				errs = append(errs, fmt.Errorf("transaction %s: %w", e.TxHash, err))
-				m.refundAt = 0
 				continue
 			}
 			// The proof is of the id, so the bytes must be the transaction with it.
@@ -429,6 +447,11 @@ func (m *Manager) proveMined(ctx context.Context, id chainhash.Hash, raw []byte,
 		if block, err := m.prove(ctx, id, raw, hint); err == nil {
 			return hint, block, true, nil
 		}
+		// A hint that did not prove is tried once: the block is somewhere else,
+		// or the transaction is not in one.
+		m.mu.Lock()
+		delete(m.hints, id)
+		m.mu.Unlock()
 	}
 	if last, ok := m.asked[id]; ok && tip-last < askAgain {
 		return 0, chainhash.Hash{}, false, nil
@@ -494,6 +517,9 @@ const (
 	// The wallet is told of a dissolution that pays its own share, which it
 	// subscribes to, so this is for one that does not, and for a restore.
 	refundEvery = 10
+	// refundBackoff is how many blocks pass before a refund script that the
+	// server would not give is asked for again.
+	refundBackoff = 60
 	// idleLimit is how many Refreshes a tracked dissolution spends nothing the
 	// wallet holds before it is no longer tracked.
 	idleLimit = 144
