@@ -52,6 +52,9 @@ type dashWallet struct {
 	refresh chan struct{}
 	// retryTrack asks the track loop to try again what waited for the unlock.
 	retryTrack chan struct{}
+	// early is the subscription to the wallet's transactions made as it opens,
+	// which the track loop takes.
+	early atomic.Pointer[feed]
 }
 
 // openDashSharedWallet constructs the electrum wallet with shared masternode
@@ -69,6 +72,7 @@ func openDashSharedWallet(cfg *asset.WalletConfig, chainParams *chaincfg.Params,
 	}
 	cc := dashElectrumChainConfig(chainParams)
 	cc.OnTip = dw.onTip
+	cc.OnOpen = dw.onOpen
 	cc.AdjustBalance = dw.adjustBalance
 	dw.NativeWallet = btc.NewNativeWallet(cc, cfg, log)
 	return dw
@@ -81,6 +85,7 @@ func (dw *dashWallet) Connect(ctx context.Context) (*sync.WaitGroup, error) {
 	dw.mnErr.Store(nil)
 	wg, err := dw.NativeWallet.Connect(ctx)
 	if err != nil {
+		dw.dropEarlyFeed()
 		return nil, err
 	}
 	dw.trackMasternodes(ctx, wg)
@@ -95,6 +100,7 @@ func (dw *dashWallet) trackMasternodes(ctx context.Context, wg *sync.WaitGroup) 
 		err = fmt.Errorf("shared masternodes are unavailable: %w", err)
 		dw.mnErr.Store(&err)
 		dw.log.Errorf("%v", err)
+		dw.dropEarlyFeed()
 		return
 	}
 	dw.mn.Store(mgr)

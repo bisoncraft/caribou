@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/btcsuite/btcd/btcec/v2"
+	"github.com/btcsuite/btcd/chaincfg/chainhash"
 	"github.com/btcsuite/btcd/wire"
 
 	"github.com/bisoncraft/caribou/util"
@@ -53,8 +54,12 @@ func vectorRaw(t *testing.T, name string) []byte {
 
 // fakeSource is a txSource.
 type fakeSource struct {
-	res *wallet.GetTransactionsResult
-	ch  chan *wallet.TransactionNotifications
+	res    *wallet.GetTransactionsResult
+	ch     chan *wallet.TransactionNotifications
+	synced int32
+	from   atomic.Int32 // the height Transactions was asked from
+	mu     sync.Mutex
+	has    map[chainhash.Hash]bool
 }
 
 func newFakeSource(res *wallet.GetTransactionsResult) *fakeSource {
@@ -65,7 +70,21 @@ func (s *fakeSource) Notifications() (<-chan *wallet.TransactionNotifications, f
 	return s.ch, func() { close(s.ch) }
 }
 
-func (s *fakeSource) Transactions() (*wallet.GetTransactionsResult, error) { return s.res, nil }
+func (s *fakeSource) Transactions(height int32, _ <-chan struct{}) (*wallet.GetTransactionsResult, error) {
+	s.from.Store(height)
+	return s.res, nil
+}
+
+func (s *fakeSource) Synced() int32 { return s.synced }
+
+func (s *fakeSource) Has(id chainhash.Hash) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if has, ok := s.has[id]; ok {
+		return has, nil
+	}
+	return true, nil // the wallet has what it was not told to have dropped
+}
 
 // switchKeys derives no key until it is switched on, as a wallet that is locked.
 type switchKeys struct {
@@ -251,7 +270,7 @@ func TestTrackLoopWaitsForTheUnlock(t *testing.T) {
 // Discover runs once, when the wallet has the keys it needs, and not before.
 func TestDiscoverWaitsForKeysAndRunsOnce(t *testing.T) {
 	dw := openDashSharedWallet(&asset.WalletConfig{DataDir: t.TempDir()}, RegressionNetParams, util.Disabled)
-	chain := &chainStub{}
+	chain := &chainStub{header: &wire.BlockHeader{}}
 	mgr, _ := trackingManager(t, chain, seqKeys{})
 	if need, err := mgr.NeedsKeys(); err != nil || !need {
 		t.Fatalf("needs keys: %v %v", need, err)
@@ -318,4 +337,230 @@ func TestDiscoverIsNotRepeated(t *testing.T) {
 	if !dw.discover(t.Context(), mgr) || chain.tips.Load() != 0 {
 		t.Fatalf("discovered again: %d", chain.tips.Load())
 	}
+}
+
+func rawTxID(t *testing.T, raw []byte) chainhash.Hash {
+	t.Helper()
+	tx := &bisonwire.Tx{Chain: "dash"}
+	if err := tx.Deserialize(bytes.NewReader(raw)); err != nil {
+		t.Fatal(err)
+	}
+	return tx.TxHash()
+}
+
+// A registration the wallet gave and no longer has, because another transaction
+// spent its inputs, is untracked, so the server is not asked for it on every
+// block. The wallet does not say what it dropped: a notification lists what it
+// still has unmined.
+func TestTrackLoopUntracksWhatTheWalletDropped(t *testing.T) {
+	dw := openDashSharedWallet(&asset.WalletConfig{DataDir: t.TempDir()}, RegressionNetParams, util.Disabled)
+	mgr, store := trackingManager(t, &chainStub{}, seqKeys{})
+	if err := store.Save(masternode.Update{Cursor: &masternode.Cursor{Height: 910}}); err != nil {
+		t.Fatal(err)
+	}
+	reg := vectorRaw(t, "proregtx")
+	id := rawTxID(t, reg)
+	tracked := func() int {
+		snap, err := store.Load()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return len(snap.Tracked)
+	}
+	start := func(src *fakeSource) func() {
+		ctx, cancel := context.WithCancel(t.Context())
+		var wg sync.WaitGroup
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			dw.trackLoop(ctx, mgr, src)
+		}()
+		return func() { cancel(); wg.Wait() }
+	}
+
+	// While running: the wallet has it, then drops it, and the next
+	// notification does not list it.
+	src := newFakeSource(&wallet.GetTransactionsResult{
+		UnminedTransactions: []wallet.TransactionSummary{{Transaction: reg}},
+	})
+	stop := start(src)
+	waitFor(t, "the registration to be tracked", func() bool { return tracked() == 1 })
+	src.ch <- &wallet.TransactionNotifications{}
+	time.Sleep(50 * time.Millisecond)
+	if tracked() != 1 {
+		t.Fatal("untracked a transaction the wallet still has")
+	}
+	src.mu.Lock()
+	src.has = map[chainhash.Hash]bool{id: false}
+	src.mu.Unlock()
+	src.ch <- &wallet.TransactionNotifications{}
+	waitFor(t, "the dropped registration to be untracked", func() bool { return tracked() == 0 })
+	stop()
+
+	// At start: tracked by an earlier session, and not in the wallet.
+	if err := mgr.Track(reg, 0); err != nil {
+		t.Fatal(err)
+	}
+	src = newFakeSource(&wallet.GetTransactionsResult{})
+	src.has = map[chainhash.Hash]bool{id: false}
+	stop = start(src)
+	defer stop()
+	waitFor(t, "the dropped registration to be untracked at start", func() bool { return tracked() == 0 })
+}
+
+// A registration that is tracked but that the wallet never had, one put back
+// after a reorg or added by id, is not untracked for being absent from it.
+func TestTrackLoopKeepsWhatTheWalletNeverHad(t *testing.T) {
+	dw := openDashSharedWallet(&asset.WalletConfig{DataDir: t.TempDir()}, RegressionNetParams, util.Disabled)
+	mgr, store := trackingManager(t, &chainStub{}, seqKeys{})
+	if err := store.Save(masternode.Update{Cursor: &masternode.Cursor{Height: 910}}); err != nil {
+		t.Fatal(err)
+	}
+	reg := vectorRaw(t, "proregtx")
+	if err := store.Save(masternode.Update{Track: [][]byte{reg}}); err != nil {
+		t.Fatal(err)
+	}
+	src := newFakeSource(&wallet.GetTransactionsResult{})
+	src.has = map[chainhash.Hash]bool{rawTxID(t, reg): false}
+	ctx, cancel := context.WithCancel(t.Context())
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		dw.trackLoop(ctx, mgr, src)
+	}()
+	defer func() { cancel(); wg.Wait() }()
+	time.Sleep(50 * time.Millisecond)
+	src.ch <- &wallet.TransactionNotifications{}
+	time.Sleep(50 * time.Millisecond)
+	snap, err := store.Load()
+	if err != nil || len(snap.Tracked) != 1 {
+		t.Fatalf("%v, %d tracked", err, len(snap.Tracked))
+	}
+}
+
+// A restart reads only the wallet's transactions since the height it read
+// through, less a margin for a replaced block.
+func TestTrackLoopReadsFromWhereItStopped(t *testing.T) {
+	dw := openDashSharedWallet(&asset.WalletConfig{DataDir: t.TempDir()}, RegressionNetParams, util.Disabled)
+	mgr, store := trackingManager(t, &chainStub{}, seqKeys{})
+	if err := store.Save(masternode.Update{Cursor: &masternode.Cursor{Height: 910}}); err != nil {
+		t.Fatal(err)
+	}
+	run := func(src *fakeSource) {
+		ctx, cancel := context.WithCancel(t.Context())
+		var wg sync.WaitGroup
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			dw.trackLoop(ctx, mgr, src)
+		}()
+		defer func() { cancel(); wg.Wait() }()
+		waitFor(t, "the height to be saved", func() bool {
+			snap, err := store.Load()
+			return err == nil && snap.TxRead == src.synced
+		})
+	}
+	first := newFakeSource(&wallet.GetTransactionsResult{})
+	first.synced = 5000
+	run(first)
+	if got := first.from.Load(); got != 0 {
+		t.Fatalf("first read from %d", got)
+	}
+	second := newFakeSource(&wallet.GetTransactionsResult{})
+	second.synced = 5010
+	run(second)
+	if got := second.from.Load(); got != 5000-txReadMargin {
+		t.Fatalf("second read from %d, want %d", got, 5000-txReadMargin)
+	}
+}
+
+// A Discover that failed for a reason that may pass, such as headers that are
+// not there yet, is not taken for one that ran: the loop tries it again.
+func TestDiscoverIsTriedAgainAfterATransientFailure(t *testing.T) {
+	dw := openDashSharedWallet(&asset.WalletConfig{DataDir: t.TempDir()}, RegressionNetParams, util.Disabled)
+	mgr, _ := trackingManager(t, &chainStub{}, seqKeys{}) // no header at the tip
+	if err := mgr.PrimeOwnerKeys(); err != nil {
+		t.Fatal(err)
+	}
+	if dw.discover(t.Context(), mgr) {
+		t.Fatal("a Discover that could not read the tip was taken for done")
+	}
+	if done, err := mgr.Discovered(); err != nil || done {
+		t.Fatalf("%v %v", done, err)
+	}
+}
+
+// A transaction that could not be tracked holds back the height saved, so a
+// restart gives it again.
+func TestTrackLoopHoldsTheHeightForATransactionItCouldNotTrack(t *testing.T) {
+	dw := openDashSharedWallet(&asset.WalletConfig{DataDir: t.TempDir()}, RegressionNetParams, util.Disabled)
+	mgr, store := trackingManager(t, &chainStub{}, seqKeys{})
+	if err := store.Save(masternode.Update{Cursor: &masternode.Cursor{Height: 910}}); err != nil {
+		t.Fatal(err)
+	}
+	// It has the type of a registration and is not one.
+	bad := []byte{0x03, 0x00, 0x01, 0x00, 0xff}
+	if !masternode.IsProviderTx(bad) {
+		t.Fatal("setup: not picked as a provider transaction")
+	}
+	src := newFakeSource(&wallet.GetTransactionsResult{
+		MinedTransactions: []wallet.Block{{Height: 700, Transactions: []wallet.TransactionSummary{{Transaction: bad}}}},
+	})
+	src.synced = 5000
+	ctx, cancel := context.WithCancel(t.Context())
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		dw.trackLoop(ctx, mgr, src)
+	}()
+	defer func() { cancel(); wg.Wait() }()
+	time.Sleep(100 * time.Millisecond)
+	snap, err := store.Load()
+	if err != nil || snap.TxRead != 0 {
+		t.Fatalf("saved %d past a transaction that was not tracked: %v", snap.TxRead, err)
+	}
+}
+
+// The wallet records transactions while it synchronizes, before the track loop
+// starts, and one it finds can be of a block below the height a restart reads
+// from. The subscription made as the wallet opens is told of it, and the loop
+// takes it.
+func TestTrackLoopGetsWhatTheWalletRecordsBeforeItStarts(t *testing.T) {
+	dw := openDashSharedWallet(&asset.WalletConfig{DataDir: t.TempDir()}, RegressionNetParams, util.Disabled)
+	mgr, store := trackingManager(t, &chainStub{}, seqKeys{})
+	if err := store.Save(masternode.Update{Cursor: &masternode.Cursor{Height: 910}}); err != nil {
+		t.Fatal(err)
+	}
+	// An earlier session read through 5000, so a restart reads from 4900.
+	if err := mgr.SetTxRead(5000); err != nil {
+		t.Fatal(err)
+	}
+	src := newFakeSource(&wallet.GetTransactionsResult{})
+	src.synced = 5000
+	dw.early.Store(startFeed(src))
+
+	// The synchronization records a registration at height 798, and the wallet
+	// waits for the notification to be read: the loop is not running.
+	src.ch <- &wallet.TransactionNotifications{AttachedBlocks: []wallet.Block{
+		{Height: 798, Transactions: []wallet.TransactionSummary{{Transaction: vectorRaw(t, "proregtx")}}},
+		{Height: 5000},
+	}}
+
+	ctx, cancel := context.WithCancel(t.Context())
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		dw.trackLoop(ctx, mgr, src)
+	}()
+	defer func() { cancel(); wg.Wait() }()
+	if got := src.from.Load(); got > 4900 && got != 0 {
+		t.Fatalf("read from %d", got)
+	}
+	waitFor(t, "the registration recorded before the loop started to be tracked", func() bool {
+		snap, err := store.Load()
+		return err == nil && len(snap.Tracked) == 1
+	})
 }

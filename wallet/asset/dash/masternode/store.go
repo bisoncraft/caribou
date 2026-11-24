@@ -21,6 +21,7 @@ var (
 	storeBucket  = []byte("dashmn")
 	nextKey      = []byte("next")
 	cursorKey    = []byte("cursor")
+	txReadKey    = []byte("txread")
 	ownersBucket = []byte("owners")
 	regsBucket   = []byte("regs")
 	versionKey   = []byte("version")
@@ -29,6 +30,10 @@ var (
 	// trackedBucket holds the wallet's own registrations and dissolutions that
 	// are not proven yet, by transaction id, as raw transactions.
 	trackedBucket = []byte("tracked")
+	// walletBucket marks the tracked transactions that came from the wallet's
+	// own transactions, by transaction id, as opposed to those a reorg put back
+	// or that were added by id, which the wallet has no record of.
+	walletBucket = []byte("fromwallet")
 )
 
 // storeVersion is the layout of the store. Once a store has shipped, a record
@@ -93,7 +98,7 @@ func NewStore(db walletdb.DB) (*Store, error) {
 		if err := checkVersion(v); err != nil {
 			return err
 		}
-		for _, name := range [][]byte{ownersBucket, regsBucket, dissolvedBucket, trackedBucket} {
+		for _, name := range [][]byte{ownersBucket, regsBucket, dissolvedBucket, trackedBucket, walletBucket} {
 			if _, err := b.CreateBucketIfNotExists(name); err != nil {
 				return err
 			}
@@ -145,13 +150,18 @@ type Snapshot struct {
 	// NextOwner is the next owner index to hand out.
 	NextOwner uint32
 	// OwnerKeyIDs maps an owner key id to its index.
-	OwnerKeyIDs   map[[protx.KeyIDSize]byte]uint32
-	Cursor        Cursor
+	OwnerKeyIDs map[[protx.KeyIDSize]byte]uint32
+	Cursor      Cursor
+	// TxRead is the height the wallet's transactions have been given to Track
+	// through, or 0 if none have.
+	TxRead        int32
 	Registrations map[chainhash.Hash]Registration
 	// Dissolutions are by the proTxHash of a stored registration.
 	Dissolutions map[chainhash.Hash]Spend
 	// Tracked are the raw transactions to prove, by transaction id.
 	Tracked map[chainhash.Hash][]byte
+	// FromWallet are the tracked ones the wallet had.
+	FromWallet map[chainhash.Hash]struct{}
 }
 
 // Update is a change to the store, applied together or not at all.
@@ -187,8 +197,14 @@ type Update struct {
 	// registration a reorg dropped can be put back to be proven again.
 	Track   [][]byte
 	Untrack []chainhash.Hash
+	// Wallet marks tracked transactions as the wallet's own, which it may
+	// stop tracking once the wallet no longer has them.
+	Wallet []chainhash.Hash
 	// Cursor, if not nil, replaces the discovery cursor.
 	Cursor *Cursor
+	// TxRead, if not nil, replaces the height the wallet's transactions have
+	// been read through.
+	TxRead *int32
 }
 
 func nextOwner(b walletdb.ReadBucket) (uint32, error) {
@@ -331,7 +347,8 @@ func (s *Store) Save(u Update) error {
 		}
 		owners := b.NestedReadWriteBucket(ownersBucket)
 		trk := b.NestedReadWriteBucket(trackedBucket)
-		if owners == nil || trk == nil || b.NestedReadWriteBucket(regsBucket) == nil || b.NestedReadWriteBucket(dissolvedBucket) == nil {
+		wl := b.NestedReadWriteBucket(walletBucket)
+		if owners == nil || trk == nil || wl == nil || b.NestedReadWriteBucket(regsBucket) == nil || b.NestedReadWriteBucket(dissolvedBucket) == nil {
 			return errors.New("masternode store is missing a bucket")
 		}
 		for idx, id := range u.OwnerKeyIDs {
@@ -383,8 +400,14 @@ func (s *Store) Save(u Update) error {
 				return err
 			}
 		}
+		untrack := func(h []byte) error {
+			if err := wl.Delete(h); err != nil {
+				return err
+			}
+			return trk.Delete(h)
+		}
 		for _, h := range u.Untrack {
-			if err := trk.Delete(h[:]); err != nil {
+			if err := untrack(h[:]); err != nil {
 				return err
 			}
 		}
@@ -392,12 +415,24 @@ func (s *Store) Save(u Update) error {
 			if err := trk.Put(tracked[i][:], raw); err != nil {
 				return err
 			}
+			// A transaction put back is no longer the wallet's to drop.
+			if err := wl.Delete(tracked[i][:]); err != nil {
+				return err
+			}
+		}
+		for _, h := range u.Wallet {
+			if trk.Get(h[:]) == nil {
+				return errors.New("wallet mark of a transaction that is not tracked")
+			}
+			if err := wl.Put(h[:], []byte{1}); err != nil {
+				return err
+			}
 		}
 		for i, r := range u.Registrations {
 			if err := regs.Put(hashes[i][:], regValue(r)); err != nil {
 				return err
 			}
-			if err := trk.Delete(hashes[i][:]); err != nil {
+			if err := untrack(hashes[i][:]); err != nil {
 				return err
 			}
 		}
@@ -412,7 +447,7 @@ func (s *Store) Save(u Update) error {
 			if err := dis.Put(h[:], append(v, sp.Tx...)); err != nil {
 				return err
 			}
-			if err := trk.Delete(sp.TxID[:]); err != nil {
+			if err := untrack(sp.TxID[:]); err != nil {
 				return err
 			}
 		}
@@ -420,6 +455,13 @@ func (s *Store) Save(u Update) error {
 			v := make([]byte, 4, 36)
 			binary.BigEndian.PutUint32(v, uint32(u.Cursor.Height))
 			if err := b.Put(cursorKey, append(v, u.Cursor.Hash[:]...)); err != nil {
+				return err
+			}
+		}
+		if u.TxRead != nil {
+			v := make([]byte, 4)
+			binary.BigEndian.PutUint32(v, uint32(*u.TxRead))
+			if err := b.Put(txReadKey, v); err != nil {
 				return err
 			}
 		}
@@ -435,6 +477,7 @@ func (s *Store) Load() (Snapshot, error) {
 		Registrations: make(map[chainhash.Hash]Registration),
 		Dissolutions:  make(map[chainhash.Hash]Spend),
 		Tracked:       make(map[chainhash.Hash][]byte),
+		FromWallet:    make(map[chainhash.Hash]struct{}),
 	}
 	err := walletdb.View(s.db, func(tx walletdb.ReadTx) error {
 		b := tx.ReadBucket(storeBucket)
@@ -448,7 +491,7 @@ func (s *Store) Load() (Snapshot, error) {
 		if err := checkVersion(v); err != nil {
 			return err
 		}
-		for _, name := range [][]byte{ownersBucket, regsBucket, dissolvedBucket, trackedBucket} {
+		for _, name := range [][]byte{ownersBucket, regsBucket, dissolvedBucket, trackedBucket, walletBucket} {
 			if b.NestedReadBucket(name) == nil {
 				return errors.New("masternode store is missing a bucket")
 			}
@@ -462,6 +505,12 @@ func (s *Store) Load() (Snapshot, error) {
 			}
 			snap.Cursor.Height = int32(binary.BigEndian.Uint32(v))
 			copy(snap.Cursor.Hash[:], v[4:])
+		}
+		if v := b.Get(txReadKey); v != nil {
+			if len(v) != 4 {
+				return fmt.Errorf("transaction height is %d bytes", len(v))
+			}
+			snap.TxRead = int32(binary.BigEndian.Uint32(v))
 		}
 		err = b.NestedReadBucket(ownersBucket).ForEach(func(k, v []byte) error {
 			if len(k) != 4 || len(v) != protx.KeyIDSize {
@@ -502,6 +551,18 @@ func (s *Store) Load() (Snapshot, error) {
 			var h chainhash.Hash
 			copy(h[:], k)
 			snap.Tracked[h] = bytes.Clone(v)
+			return nil
+		})
+		if err != nil {
+			return err
+		}
+		err = b.NestedReadBucket(walletBucket).ForEach(func(k, v []byte) error {
+			if len(k) != chainhash.HashSize {
+				return errors.New("malformed wallet mark")
+			}
+			var h chainhash.Hash
+			copy(h[:], k)
+			snap.FromWallet[h] = struct{}{}
 			return nil
 		})
 		if err != nil {

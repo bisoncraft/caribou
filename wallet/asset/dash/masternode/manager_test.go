@@ -608,20 +608,6 @@ func TestDiscoverSkipsUnprovableSpend(t *testing.T) {
 	}
 }
 
-// What was proven below the chain's headers stays: no reorg reaches it.
-func TestEntriesAboveTipAreLeft(t *testing.T) {
-	e := newEnv(t)
-	e.own(map[uint32][20]byte{1: e.idA}, 0)
-	e.chain.history[0].Height = tipHeight + 1
-	m := e.manager()
-	if err := m.Discover(t.Context()); err != nil {
-		t.Fatal(err)
-	}
-	if m.StakedAmount() != 0 {
-		t.Fatal("found a registration above the tip")
-	}
-}
-
 func TestSharedMN(t *testing.T) {
 	e := newEnv(t)
 	e.own(map[uint32][20]byte{1: e.idA}, 0)

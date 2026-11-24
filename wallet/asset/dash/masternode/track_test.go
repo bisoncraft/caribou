@@ -680,6 +680,40 @@ func TestDiscoverReportsAServerThatRefuses(t *testing.T) {
 	}
 }
 
+// A server whose history is ahead of the chain's headers has transactions that
+// cannot be proven yet. That Discover must not be taken for one that read them:
+// a later one, once the headers have caught up, finds the masternode.
+func TestDiscoverWaitsForTheHeaders(t *testing.T) {
+	e := newEnv(t)
+	e.own(map[uint32][20]byte{1: e.idA}, 0)
+	m := e.manager()
+	e.chain.mu.Lock()
+	e.chain.history[0].Height = tipHeight + 1
+	e.chain.mu.Unlock()
+	if err := m.Discover(t.Context()); !errors.Is(err, ErrHeadersBehind) {
+		t.Fatalf("%v", err)
+	}
+	if done, err := m.Discovered(); err != nil || done {
+		t.Fatalf("a Discover that skipped history is done: %v %v", done, err)
+	}
+	if m.StakedAmount() != 0 {
+		t.Fatal("staked from a registration above the headers")
+	}
+
+	e.chain.mu.Lock()
+	e.chain.history[0].Height = heightA
+	e.chain.mu.Unlock()
+	if err := m.Discover(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if done, err := m.Discovered(); err != nil || !done {
+		t.Fatalf("%v %v", done, err)
+	}
+	if m.StakedAmount() == 0 {
+		t.Fatal("the masternode was not found once the headers caught up")
+	}
+}
+
 // A dissolution the wallet tracked, which its refund scripts do not show, is
 // proven again by the block it is in after a reorg.
 func TestTrackedDissolutionSurvivesAReorg(t *testing.T) {

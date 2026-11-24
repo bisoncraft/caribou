@@ -55,6 +55,10 @@ var (
 	// Nothing else reads it: a registration can still be added with Track or
 	// TrackTxID.
 	ErrSharedHistory = errors.New("the server does not return the history of the shared collateral script")
+	// ErrHeadersBehind is returned by Discover when the server's history has a
+	// transaction above the chain's tip. Nothing is marked as read, and a later
+	// Discover reads it once the headers have caught up.
+	ErrHeadersBehind = errors.New("the chain's headers are behind the server's history")
 	// ErrNotOurs is returned by Track for a registration that none of the
 	// wallet's owner keys is in.
 	ErrNotOurs = errors.New("not a registration of this wallet")
@@ -335,22 +339,26 @@ func (m *Manager) Discover(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	up := Update{
-		Dissolutions: make(map[chainhash.Hash]Spend),
-		// Discovery has read the history to this block.
-		Cursor: &Cursor{Height: tip, Hash: tipHdr.BlockHash()},
-	}
+	up := Update{Dissolutions: make(map[chainhash.Hash]Spend)}
 	live, known := m.reconcile(snap, stored, &up)
 
 	history, err := m.chain.GetHistory(ctx, sharedCollateralScripthash)
 	if err != nil {
 		return fmt.Errorf("%w: %w", ErrSharedHistory, err)
 	}
+	// A server ahead of the headers has entries that cannot be proven yet, and
+	// a Discover that skipped them must not be taken for one that read them.
+	for _, e := range history {
+		if e.Height > tip {
+			return ErrHeadersBehind
+		}
+	}
+	// Discovery has read the history to this block.
+	up.Cursor = &Cursor{Height: tip, Hash: tipHdr.BlockHash()}
 	var cands []*candidate
 	for _, e := range history {
-		// Mempool entries are not proven, and entries above the headers are
-		// read by a later Discover, once the headers catch up.
-		if e.Height <= 0 || e.Height > tip {
+		// Mempool entries are not proven.
+		if e.Height <= 0 {
 			continue
 		}
 		id, err := chainhash.NewHashFromStr(e.TxHash)

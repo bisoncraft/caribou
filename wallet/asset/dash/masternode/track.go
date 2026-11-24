@@ -45,6 +45,12 @@ import (
 // as the spend of a masternode of the wallet's, and stays tracked until then:
 // Untrack removes one that is not wanted.
 func (m *Manager) Track(raw []byte, height int32) error {
+	return m.track(raw, height, true)
+}
+
+// track tracks raw. fromWallet is for a transaction the wallet has, which the
+// caller may untrack once the wallet no longer does.
+func (m *Manager) track(raw []byte, height int32, fromWallet bool) error {
 	id, err := trackable(raw)
 	if err != nil {
 		return err
@@ -54,6 +60,9 @@ func (m *Manager) Track(raw []byte, height int32) error {
 		return err
 	}
 	up := Update{Track: [][]byte{raw}}
+	if fromWallet {
+		up.Wallet = []chainhash.Hash{id}
+	}
 	if tx.Type == txTypeProReg {
 		snap, err := m.store.Load()
 		if err != nil {
@@ -106,7 +115,7 @@ func (m *Manager) TrackTxID(ctx context.Context, id chainhash.Hash) error {
 	if tx.TxHash() != id {
 		return fmt.Errorf("transaction %s is served as %s", id, tx.TxHash())
 	}
-	return m.Track(raw, 0)
+	return m.track(raw, 0, false)
 }
 
 // Untrack stops waiting for a transaction, such as one the wallet has dropped

@@ -8,9 +8,26 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"time"
 
 	"github.com/bisoncraft/caribou/wallet/asset/dash/masternode"
 	"github.com/bisoncraft/caribou/wallet/utxowallet/wallet"
+	"github.com/btcsuite/btcd/chaincfg/chainhash"
+)
+
+// txReadMargin is how many blocks below the height it has read through a
+// restart reads the wallet's transactions from, for a block that was replaced.
+const txReadMargin = 100
+
+// A Discover that could not finish, and a transaction that could not be tracked,
+// are tried again after retryFirst, and then after twice as long each time, up
+// to retryMax.
+const (
+	retryFirst = time.Minute
+	retryMax   = 30 * time.Minute
+	// trackTries is how many times a transaction that could not be tracked is
+	// tried before it is given up.
+	trackTries = 5
 )
 
 // A shared registration spends the funds of every share owner, so it is among
@@ -26,8 +43,13 @@ type txSource interface {
 	// channel is closed after it. A notification is sent without buffering,
 	// so the channel has to be read promptly.
 	Notifications() (<-chan *wallet.TransactionNotifications, func())
-	// Transactions returns every transaction the wallet has, mined and not.
-	Transactions() (*wallet.GetTransactionsResult, error)
+	// Transactions returns the transactions the wallet has from the block at
+	// height on, and every one that is not mined, until cancel is closed.
+	Transactions(height int32, cancel <-chan struct{}) (*wallet.GetTransactionsResult, error)
+	// Synced is the height the wallet has processed blocks through.
+	Synced() int32
+	// Has reports whether the wallet has the transaction, mined or not.
+	Has(id chainhash.Hash) (bool, error)
 }
 
 // walletSource is a txSource over the wallet.
@@ -38,8 +60,22 @@ func (s walletSource) Notifications() (<-chan *wallet.TransactionNotifications, 
 	return c.C, c.Done
 }
 
-func (s walletSource) Transactions() (*wallet.GetTransactionsResult, error) {
-	return s.w.GetTransactions(nil, nil, "", nil)
+func (s walletSource) Transactions(height int32, cancel <-chan struct{}) (*wallet.GetTransactionsResult, error) {
+	var start *wallet.BlockIdentifier
+	if height > 0 {
+		start = wallet.NewBlockIdentifierFromHeight(height)
+	}
+	return s.w.GetTransactions(start, nil, "", cancel)
+}
+
+func (s walletSource) Synced() int32 { return s.w.Manager.SyncedTo().Height }
+
+func (s walletSource) Has(id chainhash.Hash) (bool, error) {
+	_, err := s.w.GetTransaction(id)
+	if errors.Is(err, wallet.ErrNoTx) {
+		return false, nil
+	}
+	return err == nil, err
 }
 
 // walletTx is a registration or dissolution in the wallet, and the height of
@@ -47,25 +83,27 @@ func (s walletSource) Transactions() (*wallet.GetTransactionsResult, error) {
 type walletTx struct {
 	raw    []byte
 	height int32
+	tries  int
 }
 
 // txQueue holds transactions for the track loop. The channel that notifications
 // arrive on is unbuffered, so what is received is only queued, and the work is
 // left to the loop.
 type txQueue struct {
-	mu   sync.Mutex
-	txs  []walletTx
-	wake chan struct{}
+	mu      sync.Mutex
+	txs     []walletTx
+	recheck bool  // the wallet's transactions changed
+	height  int32 // the highest block queued
+	wake    chan struct{}
 }
 
 func newTxQueue() *txQueue { return &txQueue{wake: make(chan struct{}, 1)} }
 
-func (q *txQueue) add(txs ...walletTx) {
-	if len(txs) == 0 {
-		return
-	}
+func (q *txQueue) add(height int32, txs []walletTx, recheck bool) {
 	q.mu.Lock()
 	q.txs = append(q.txs, txs...)
+	q.recheck = q.recheck || recheck
+	q.height = max(q.height, height)
 	q.mu.Unlock()
 	select {
 	case q.wake <- struct{}{}:
@@ -73,12 +111,22 @@ func (q *txQueue) add(txs ...walletTx) {
 	}
 }
 
-func (q *txQueue) take() []walletTx {
+// take returns what is queued, and the height of the highest block of it.
+func (q *txQueue) take() (txs []walletTx, recheck bool, height int32) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
-	txs := q.txs
-	q.txs = nil
-	return txs
+	txs, recheck, height = q.txs, q.recheck, q.height
+	q.txs, q.recheck = nil, false
+	return
+}
+
+// blocksHeight is the height of the highest block of a notification.
+func blocksHeight(blocks []wallet.Block) int32 {
+	var h int32
+	for _, b := range blocks {
+		h = max(h, b.Height)
+	}
+	return h
 }
 
 func providerTxs(mined []wallet.Block, unmined []wallet.TransactionSummary) []walletTx {
@@ -98,6 +146,50 @@ func providerTxs(mined []wallet.Block, unmined []wallet.TransactionSummary) []wa
 	return out
 }
 
+// feed is the wallet's transaction notifications, queued as they arrive.
+type feed struct {
+	q    *txQueue
+	stop func()
+}
+
+// startFeed subscribes to the wallet's notifications and queues what they
+// bring. The wallet waits for a notification to be read, so it is read from
+// here on, whether or not the track loop has started.
+func startFeed(src txSource) *feed {
+	ch, done := src.Notifications()
+	q := newTxQueue()
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for n := range ch {
+			// The hashes in a notification are the transactions the wallet
+			// still has unmined, not the ones it dropped, so a drop is found by
+			// asking the wallet about what is tracked.
+			q.add(blocksHeight(n.AttachedBlocks), providerTxs(n.AttachedBlocks, n.UnminedTransactions), true)
+		}
+	}()
+	return &feed{q: q, stop: func() {
+		done()
+		wg.Wait()
+	}}
+}
+
+// onOpen subscribes to the wallet as it opens, before it synchronizes, because
+// the synchronization records transactions that are below the height a restart
+// reads from, and only a subscription that is already there is told of them.
+func (dw *dashWallet) onOpen(w *wallet.Wallet) {
+	dw.dropEarlyFeed()
+	dw.early.Store(startFeed(walletSource{w}))
+}
+
+// dropEarlyFeed ends a subscription that no track loop took.
+func (dw *dashWallet) dropEarlyFeed() {
+	if f := dw.early.Swap(nil); f != nil {
+		f.stop()
+	}
+}
+
 // trackLoop gives the Manager the registrations and dissolutions in the wallet,
 // those it has now and those that arrive, until ctx ends, and runs the
 // Discover that finds a wallet's masternodes that it has no transaction of, once.
@@ -106,57 +198,125 @@ func providerTxs(mined []wallet.Block, unmined []wallet.TransactionSummary) []wa
 // need a key that is not cached while the wallet is locked. It is tried again
 // when the wallet is unlocked, which asks through retryTrack.
 func (dw *dashWallet) trackLoop(ctx context.Context, mgr *masternode.Manager, src txSource) {
-	ch, stop := src.Notifications()
-	q := newTxQueue()
-	var wg sync.WaitGroup
-	wg.Add(1)
+	f := dw.early.Swap(nil)
+	if f == nil {
+		f = startFeed(src)
+	}
+	q := f.q
+	defer f.stop()
+
+	// Only what the wallet has recorded since the last read is read: what is
+	// older has been given to Track, and a registration it was waiting on is
+	// proven from the store. What is tracked and the wallet no longer has is
+	// dropped.
+	cancel := make(chan struct{})
+	finished := make(chan struct{})
+	defer close(finished)
 	go func() {
-		defer wg.Done()
-		for n := range ch {
-			q.add(providerTxs(n.AttachedBlocks, n.UnminedTransactions)...)
+		select {
+		case <-ctx.Done():
+			close(cancel)
+		case <-finished:
 		}
 	}()
-	defer func() {
-		stop()
-		wg.Wait()
-	}()
-
-	if res, err := src.Transactions(); err != nil {
+	var from int32
+	if read, err := mgr.TxRead(); err != nil {
+		dw.log.Errorf("Reading the height masternode transactions were read to: %v", err)
+	} else if read > txReadMargin {
+		from = read - txReadMargin
+	}
+	synced := src.Synced()
+	loaded := false
+	if res, err := src.Transactions(from, cancel); err != nil {
 		dw.log.Errorf("Reading the wallet's transactions for masternodes: %v", err)
 	} else {
-		q.add(providerTxs(res.MinedTransactions, res.UnminedTransactions)...)
+		q.add(synced, providerTxs(res.MinedTransactions, res.UnminedTransactions), true)
+		loaded = true
 	}
 
 	var waiting []walletTx // not the wallet's yet: its keys are not cached
 	discovered := false
+	var saved int32 // the height last saved
+	if read, err := mgr.TxRead(); err == nil {
+		saved = read
+	}
+	retryIn := retryFirst
+	var retry <-chan time.Time
 	for {
-		work := append(waiting, q.take()...)
+		queued, recheck, height := q.take()
+		work := append(waiting, queued...)
 		waiting = nil
+		failing := false // a transaction could not be tracked, and is tried again
 		tracked := false
 		for _, t := range work {
 			err := mgr.Track(t.raw, t.height)
 			switch {
 			case err == nil:
 				tracked = true
-			case errors.Is(err, masternode.ErrNotOurs):
+			case errors.Is(err, masternode.ErrNotOurs), errors.Is(err, masternode.ErrInvalidRegistration):
+				// Not a shared registration of the wallet's: an ordinary
+				// masternode registration, or another wallet's.
 			case errors.Is(err, masternode.ErrDeriveOwnerKey):
 				dw.log.Debugf("Masternode transaction waits for the wallet to be unlocked: %v", err)
 				waiting = append(waiting, t)
 			default:
-				dw.log.Errorf("Tracking a masternode transaction: %v", err)
+				// Not that it is not the wallet's, so it is not skipped: a
+				// restart would not give it again.
+				t.tries++
+				if t.tries >= trackTries {
+					dw.log.Errorf("Giving up tracking a masternode transaction: %v", err)
+					break
+				}
+				dw.log.Warnf("Tracking a masternode transaction, will try again: %v", err)
+				waiting = append(waiting, t)
+				failing = true
+			}
+		}
+		// A transaction the wallet gave and no longer has, such as one dropped
+		// because another spent its inputs, is not asked the server for any
+		// more. Those put back after a reorg, or added by id, are not the
+		// wallet's to drop.
+		if recheck {
+			ids, err := mgr.Tracked()
+			if err != nil {
+				dw.log.Errorf("Reading the tracked masternode transactions: %v", err)
+			}
+			for _, id := range ids {
+				if has, err := src.Has(id); err != nil {
+					dw.log.Errorf("Checking the wallet for masternode transaction %s: %v", id, err)
+				} else if !has {
+					if err := mgr.Untrack(id); err != nil {
+						dw.log.Errorf("Untracking masternode transaction %s: %v", id, err)
+					}
+				}
 			}
 		}
 		if tracked {
 			dw.requestRefresh()
 		}
+		// Everything up to the height has been given to Track, unless it
+		// waits for an unlock, which a restart would not give it again.
+		if loaded && len(waiting) == 0 && height > saved {
+			if err := mgr.SetTxRead(height); err != nil {
+				dw.log.Errorf("Saving the height masternode transactions were read to: %v", err)
+			} else {
+				saved = height
+			}
+		}
 		if !discovered {
 			discovered = dw.discover(ctx, mgr)
+		}
+		retry = nil
+		if !discovered || failing {
+			retry = time.After(retryIn)
 		}
 		select {
 		case <-ctx.Done():
 			return
 		case <-q.wake:
 		case <-dw.retryTrack:
+		case <-retry:
+			retryIn = min(retryIn*2, retryMax)
 		}
 	}
 }
@@ -165,8 +325,8 @@ func (dw *dashWallet) trackLoop(ctx context.Context, mgr *masternode.Manager, sr
 // script, if none has, and reports whether it ran. A wallet whose keys are not
 // cached cannot, and waits for the unlock. A server that will not give the
 // history is not asked again until the next Connect: the registrations in the
-// wallet are tracked, and a masternode the wallet has no transaction of can be
-// added with TrackTxID.
+// wallet are tracked. A Discover that could not read it all, because the headers
+// are behind the server or a request failed, is tried again by the loop.
 func (dw *dashWallet) discover(ctx context.Context, mgr *masternode.Manager) bool {
 	done, err := mgr.Discovered()
 	if err != nil {
@@ -194,7 +354,7 @@ func (dw *dashWallet) discover(ctx context.Context, mgr *masternode.Manager) boo
 	case ctx.Err() != nil:
 		return false
 	case errors.Is(err, masternode.ErrSharedHistory):
-		dw.log.Warnf("Masternode discovery: %v. Masternodes the wallet has the registration of are tracked, and others can be added by their transaction id.", err)
+		dw.log.Warnf("Masternode discovery: %v. Masternodes the wallet has the registration of are tracked, but one it has no transaction of is not found.", err)
 	case errors.Is(err, masternode.ErrUnprovable):
 		dw.log.Warnf("Masternode discovery: %v", err)
 	case errors.Is(err, masternode.ErrDeriveOwnerKey) && dw.Locked():
@@ -202,8 +362,13 @@ func (dw *dashWallet) discover(ctx context.Context, mgr *masternode.Manager) boo
 		// and unlocking caches them and asks again.
 		dw.log.Debugf("Masternode discovery waits for the wallet to be unlocked: %v", err)
 		return false
+	case errors.Is(err, masternode.ErrHeadersBehind):
+		dw.log.Debugf("Masternode discovery waits for the headers: %v", err)
+		return false
 	default:
-		dw.log.Errorf("Masternode discovery: %v", err)
+		// Not read to the end, and not marked as read: tried again.
+		dw.log.Warnf("Masternode discovery will be tried again: %v", err)
+		return false
 	}
 	if mgr.StakedAmount() != before {
 		dw.PushBalance()

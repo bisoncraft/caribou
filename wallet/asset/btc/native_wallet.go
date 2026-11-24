@@ -119,6 +119,10 @@ type ChainConfig struct {
 	// the wallet reports, including the ones it pushes itself. It must not
 	// block.
 	AdjustBalance func(*asset.Balance)
+	// OnOpen, if set, is called with the wallet once it is open and before it
+	// synchronizes with the chain, so a subscriber sees every transaction the
+	// synchronization records. It must not block.
+	OnOpen func(*wallet.Wallet)
 }
 
 // btcElectrumChainConfig returns the ChainConfig for the BTC electrum wallet.
@@ -537,6 +541,9 @@ func (w *NativeWallet) Connect(ctx context.Context) (*sync.WaitGroup, error) {
 		return nil, fmt.Errorf("native: couldn't open wallet: %w", err)
 	}
 	w.btcw = btcw
+	if w.cfg.OnOpen != nil {
+		w.cfg.OnOpen(btcw)
+	}
 
 	errCloser := util.NewErrorCloser()
 	defer errCloser.Done(w.log)
