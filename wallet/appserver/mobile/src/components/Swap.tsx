@@ -101,7 +101,7 @@ export default function Swap ({ ticker }: { ticker?: string }) {
   const {
     assets, assetsErr, sellID, buyID, sellAsset, buyAsset, sellAvail, buyAvail,
     exactOutput, editAtoms, slippageBps, setSlippageBps,
-    preview, previewErr, previewing, nextRefreshAt, depositFeeText,
+    preview, previewErr, previewing, nextRefreshAt, depositFeeReady, depositFeeErr, depositFeeText, retryDepositFee,
     requirePW, pw, setPW, executing, execErr, setExecErr, canExecute,
     sellUSD, buyUSD, sellAssetValue, buyAssetValue, sellFieldText, buyFieldText,
     rateText, minOutText, maxInText, etaText, feeBps, overBalance, formStatus,
@@ -118,7 +118,9 @@ export default function Swap ({ ticker }: { ticker?: string }) {
 
   const closeSheet = () => setSheet(null)
 
-  const header = (right?: ReactNode) => <NavHeader title={t('Swap')} onBack={nav.back} close right={right} />
+  // Leaving mid-execute would strand the progress hand-off, so the close
+  // control is withheld until execute settles.
+  const header = (right?: ReactNode) => <NavHeader title={t('Swap')} onBack={executing ? undefined : nav.back} close right={right} />
 
   // ---- Unavailable / loading states ----
 
@@ -205,7 +207,7 @@ export default function Swap ({ ticker }: { ticker?: string }) {
             <span className={sell && overBalance ? 'err' : undefined}>
               {tvar('Balance: {{ amt }}', { amt: displayBalance(avail / Math.pow(10, a.atomDecimals)) })}
               {sell && avail > 0 && (
-                <button type='button' className='swap-max' onClick={e => { e.stopPropagation(); setMax() }}>{t('Max')}</button>
+                <button type='button' className='swap-max' disabled={!depositFeeReady} onClick={e => { e.stopPropagation(); setMax() }}>{t('Max')}</button>
               )}
             </span>
           )}
@@ -230,6 +232,10 @@ export default function Swap ({ ticker }: { ticker?: string }) {
         return <button type='button' className='btn' onClick={() => { fetchPreview() }}>{t('Retry quote')}</button>
       case 'quoting':
         return <button type='button' className='btn' disabled><Spinner small />{t('Fetching quote...')}</button>
+      case 'fee':
+        return depositFeeErr
+          ? <button type='button' className='btn' onClick={retryDepositFee}>{t('Retry network fee')}</button>
+          : <button type='button' className='btn' disabled><Spinner small />{t('Estimating network fee...')}</button>
       case 'ready':
         return <button type='button' className='btn' onClick={() => { setExecErr(''); setSheet('review') }}>{t('Review swap')}</button>
     }
@@ -327,6 +333,14 @@ export default function Swap ({ ticker }: { ticker?: string }) {
     const foot = (
       <div className='swap-confirm'>
         {previewErr && <div role='alert' className='warn swap-msg'>{previewErr}</div>}
+        {overBalance && (
+          <div role='alert' className='err-box'>
+            {tvar('Not enough {{ ticker }} to cover this swap and its network fee.', { ticker: assetTicker(sellAsset) })}
+          </div>
+        )}
+        {!depositFeeReady && (
+          <div role='alert' className='warn swap-msg'>{depositFeeErr || t('Waiting for the network fee estimate.')}</div>
+        )}
         {execErr && <div role='alert' className='err-box'>{execErr}</div>}
         {requirePW && (
           <PasswordField value={pw} onChange={setPW} placeholder={t('App password')} disabled={executing} />

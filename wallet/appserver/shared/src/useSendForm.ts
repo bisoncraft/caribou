@@ -241,7 +241,7 @@ export function useSendForm ({ ticker, onSent }: UseSendFormOptions) {
   // on a successful /txfee, which for tokens also verifies the gas asset can
   // cover the fee — so this disables Send when there's insufficient gas, during
   // estimation, and on any estimate failure.
-  const canSubmit = Boolean(addrValid) && value > 0 && !overBalance && feeKnown && !sending &&
+  const canSubmit = Boolean(addrValid) && value > 0 && !overBalance && feeKnown && !estimating && !sending &&
     (!requirePW || pw !== '') && destTagValid
 
   return {

@@ -282,7 +282,11 @@ const KEY_STEP = 25
 interface SlideToConfirmProps {
   label: string
   busyLabel: string
-  onCommit: () => void
+  // onCommit may return a promise. Once it settles, a thumb that is not busy
+  // and not held returns to the start, so an attempt that returns without
+  // starting work (and without toggling busy or disabled) cannot leave it
+  // stuck at the end.
+  onCommit: () => void | Promise<void>
   disabled?: boolean
   // busy holds the thumb at the end with a spinner while the action runs.
   busy?: boolean
@@ -311,11 +315,19 @@ export function SlideToConfirm ({ label, busyLabel, onCommit, disabled, busy }: 
   // drag in progress is left alone, so a state change mid-drag (a quote
   // refresh) does not yank the thumb; the release decides.
   useEffect(() => { if (!busy && !dragRef.current) move(0) }, [busy, disabled])
-  useEffect(() => () => clearTimeout(nudgeRef.current), [])
+  const mountedRef = useRef(true)
+  const busyRef = useRef(busy)
+  busyRef.current = busy
+  useEffect(() => {
+    mountedRef.current = true
+    return () => { mountedRef.current = false; clearTimeout(nudgeRef.current) }
+  }, [])
 
   const commit = () => {
     move(travel())
-    onCommit()
+    Promise.resolve(onCommit()).finally(() => {
+      if (mountedRef.current && !busyRef.current && !dragRef.current) move(0)
+    })
   }
 
   const onPointerDown = (e: ReactPointerEvent<HTMLSpanElement>) => {

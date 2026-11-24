@@ -48,7 +48,7 @@ export default function Swap ({ depositAddress }: SwapProps) {
   const {
     assets, assetsErr, sellID, buyID, sellAsset, buyAsset, sellAvail, buyAvail,
     exactOutput, slippageBps, setSlippageBps,
-    preview, previewErr, previewing, depositFeeText,
+    preview, previewErr, previewing, depositFeeReady, depositFeeErr, depositFeeText, retryDepositFee,
     requirePW, pw, setPW, executing, execErr, setExecErr, canExecute,
     sellUSD, buyUSD, sellAssetValue, buyAssetValue, sellUSDValue, buyUSDValue,
     sellFieldText, buyFieldText, rateText, minOutText, maxInText, etaText, feeBps,
@@ -284,6 +284,14 @@ export default function Swap ({ depositAddress }: SwapProps) {
         )}
 
         {previewErr && <div role="alert" className="warncolor fs12 px-3 pb-1 text-center">{previewErr}</div>}
+        {overBalance && (
+          <div role="alert" className="errcolor fs12 px-3 pb-1 text-center">
+            {tvar('Not enough {{ ticker }} to cover this swap and its network fee.', { ticker: assetTicker(sellAsset) })}
+          </div>
+        )}
+        {!depositFeeReady && (
+          <div role="alert" className="warncolor fs12 px-3 pb-1 text-center">{depositFeeErr || t('Waiting for the network fee estimate.')}</div>
+        )}
         {execErr && <div role="alert" className="errcolor fs12 px-3 pb-1 text-center">{execErr}</div>}
 
         <div className="flex-stretch-column p-3">
@@ -320,6 +328,14 @@ export default function Swap ({ depositAddress }: SwapProps) {
             <span className="d-inline-flex align-items-center justify-content-center"><Spinner className="me-2" />{t('Fetching quote...')}</span>
           </button>
         )
+      case 'fee':
+        return depositFeeErr
+          ? <button type="button" className="feature swap-cta" onClick={retryDepositFee}>{t('Retry network fee')}</button>
+          : (
+            <button type="button" className="feature swap-cta" disabled>
+              <span className="d-inline-flex align-items-center justify-content-center"><Spinner className="me-2" />{t('Estimating network fee...')}</span>
+            </button>
+            )
       case 'ready':
         return <button type="button" className="feature swap-cta" onClick={() => { setExecErr(''); setView('review') }}>{t('Review swap')}</button>
     }

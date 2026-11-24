@@ -124,11 +124,13 @@ export function SwapRow ({ swap }: { swap: IntentsSwap }) {
   // and an em dash for failures.
   let amounts
   if (swap.state === StateSuccess || active) {
-    const approx = swap.state === StateSuccess ? '' : '~'
+    // An in-flight output is an estimate: "~" replaces the "+" rather than
+    // stacking with it.
+    const sign = swap.state === StateSuccess ? '+' : '~'
     amounts = (
       <>
         <div className='ta mono'>−{amountIn} {originTicker}</div>
-        <div className='ts mono pos'>+{approx}{amountOut} {destTicker}</div>
+        <div className='ts mono pos'>{sign}{amountOut} {destTicker}</div>
       </>
     )
   } else if (swap.state === StateRefunded) {

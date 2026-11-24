@@ -23,8 +23,9 @@ export type SwapUnit = 'asset' | 'usd'
 
 // SwapFormStatus is the form's readiness, in the order the primary action
 // reports it: no pair, no amount, insufficient balance, a failed quote
-// (retryable), a quote in flight, then ready for review.
-export type SwapFormStatus = 'select' | 'amount' | 'balance' | 'retry' | 'quoting' | 'ready'
+// (retryable), a quote in flight, a deposit fee estimate pending or failed
+// (see depositFeeErr), then ready for review.
+export type SwapFormStatus = 'select' | 'amount' | 'balance' | 'retry' | 'quoting' | 'fee' | 'ready'
 
 export interface UseSwapFormOptions {
   // liveView names the view showing live quotes ('form' or 'review'), or
@@ -111,32 +112,49 @@ export function useSwapForm ({ liveView, ticker, onExecuted }: UseSwapFormOption
   const buyAvail = availableAtoms(buyID)
 
   // Projected origin-chain network fee for the deposit transaction, in the
-  // fee asset's atoms (the parent chain's for tokens). Refreshed on the
-  // preview cadence while a live view is showing.
-  const [depositFee, setDepositFee] = useState(0)
+  // fee asset's atoms (the parent chain's for tokens), or null until the
+  // first estimate for the current sell asset arrives. Refreshed on the
+  // preview cadence while a live view is showing. A change of view keeps the
+  // last estimate; only a new sell asset discards it.
+  const [depositFee, setDepositFee] = useState<number | null>(null)
+  const [depositFeeErr, setDepositFeeErr] = useState('')
+  const [depositFeeNonce, setDepositFeeNonce] = useState(0)
   const sellWalletAsset = sellID === null ? undefined : app.user?.assets[sellID]
   const depositFeeAssetID = sellWalletAsset?.token ? sellWalletAsset.token.networkID : sellID
   useEffect(() => {
-    setDepositFee(0)
+    setDepositFee(null)
+    setDepositFeeErr('')
+  }, [sellID])
+  useEffect(() => {
     if (sellID === null || liveView === null || !app.wallet(sellID)) return
     let stale = false
     const fetchFee = async () => {
       const r = await postJSON('/api/feestate', { assetID: sellID })
-      if (!stale && r.ok) setDepositFee(r.feeState?.send ?? 0)
+      if (stale) return
+      if (!r.ok) {
+        setDepositFeeErr(r.msg || r.errMsg || t('Could not estimate the network fee.'))
+        return
+      }
+      setDepositFeeErr('')
+      setDepositFee(r.feeState?.send ?? 0)
     }
     fetchFee()
     const ticker = window.setInterval(fetchFee, previewRefreshMS)
     return () => { stale = true; window.clearInterval(ticker) }
-  }, [sellID, liveView])
+  }, [sellID, liveView, depositFeeNonce])
+  const retryDepositFee = () => setDepositFeeNonce(n => n + 1)
   // A native sell asset pays the deposit's network fee from the same
-  // balance, so only the balance net of that fee can be swapped. A token's
-  // fee comes from its parent chain.
-  const sellSpendable = sellWalletAsset && !sellWalletAsset.token ? Math.max(0, sellAvail - depositFee) : sellAvail
+  // balance, so only the balance net of that fee can be swapped, and the
+  // swap cannot proceed until the fee is known. A token's fee comes from its
+  // parent chain.
+  const nativeSell = Boolean(sellWalletAsset && !sellWalletAsset.token)
+  const depositFeeReady = !nativeSell || depositFee !== null
+  const sellSpendable = nativeSell ? Math.max(0, sellAvail - (depositFee ?? 0)) : sellAvail
   const depositFeeAsset = depositFeeAssetID == null ? undefined : app.user?.assets[depositFeeAssetID]
   const depositFeeUSD = depositFeeAsset && depositFeeAssetID != null
-    ? Doc.usdString(depositFee, depositFeeAsset.unitInfo.conventional.conversionFactor, app.idRate(depositFeeAssetID) ?? 0)
+    ? Doc.usdString(depositFee ?? 0, depositFeeAsset.unitInfo.conventional.conversionFactor, app.idRate(depositFeeAssetID) ?? 0)
     : ''
-  const depositFeeText = depositFee > 0 && depositFeeAsset
+  const depositFeeText = depositFee !== null && depositFee > 0 && depositFeeAsset
     ? `${Doc.formatCoinValue(depositFee, depositFeeAsset.unitInfo)} ${depositFeeAsset.unitInfo.conventional.unit}${depositFeeUSD !== '' ? ` (${depositFeeUSD})` : ''}`
     : ''
 
@@ -279,7 +297,8 @@ export function useSwapForm ({ liveView, ticker, onExecuted }: UseSwapFormOption
   }
 
   const setMax = () => {
-    if (!sellAsset || sellSpendable === 0) return
+    // A native asset's Max is net of the deposit fee, so it waits for one.
+    if (!sellAsset || !depositFeeReady || sellSpendable === 0) return
     const conv = sellSpendable / Math.pow(10, sellAsset.atomDecimals)
     setEditSide('sell')
     setEditUnit('asset')
@@ -384,11 +403,13 @@ export function useSwapForm ({ liveView, ticker, onExecuted }: UseSwapFormOption
   else if (overBalance) formStatus = 'balance'
   else if (previewErr) formStatus = 'retry'
   else if (!preview) formStatus = 'quoting'
+  else if (!depositFeeReady) formStatus = 'fee'
 
   // canExecute gates the review's confirm action.
   // A quote refresh can raise an exact-output swap's input past the balance
-  // while the review is open, so the balance is checked here too.
-  const canExecute = Boolean(preview) && !executing && !overBalance && (!requirePW || pw !== '')
+  // while the review is open, and a fee refresh can shrink the spendable
+  // balance, so the balance is checked here too.
+  const canExecute = Boolean(preview) && depositFeeReady && !executing && !overBalance && (!requirePW || pw !== '')
 
   return {
     // catalog and pair
@@ -396,7 +417,8 @@ export function useSwapForm ({ liveView, ticker, onExecuted }: UseSwapFormOption
     // entry
     amount, editSide, editUnit, exactOutput, editAsset, editAtoms, slippageBps, setSlippageBps,
     // quote
-    preview, previewErr, previewing, nextRefreshAt, depositFee, depositFeeText,
+    preview, previewErr, previewing, nextRefreshAt,
+    depositFee, depositFeeReady, depositFeeErr, depositFeeText, retryDepositFee,
     // execution
     requirePW, pw, setPW, executing, execErr, setExecErr, canExecute,
     // derived display

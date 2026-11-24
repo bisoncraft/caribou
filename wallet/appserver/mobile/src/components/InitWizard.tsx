@@ -76,7 +76,7 @@ function SeedInput ({ setSeed, goBack }: SeedInputProps) {
 
   return (
     <form className='frame' onSubmit={onSubmit}>
-      <SetupTop onBack={goBack} step={1} steps={2} />
+      <SetupTop onBack={submitting ? undefined : goBack} step={1} steps={2} />
       <div className='setup-main'>
         <h1 className='setup-title'>{t('Restore from seed')}</h1>
         <p className='setup-sub'>{t('Enter your recovery seed words in order, separated by spaces.')}</p>

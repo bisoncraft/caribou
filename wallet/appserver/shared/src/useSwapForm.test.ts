@@ -230,6 +230,7 @@ describe('useSwapForm execute', () => {
   it('requires the password when sends require one', async () => {
     app.appSettings = { sendRequiresPassword: true }
     vi.mocked(postJSON).mockImplementation(async (path: string) => {
+      if (path === '/api/feestate') return { ok: true, feeState: { send: 1000 } }
       if (path === '/api/intents/preview') return { ok: true, preview: previewFor(6e9) }
       return { ok: false }
     })
@@ -240,5 +241,105 @@ describe('useSwapForm execute', () => {
     expect(result.current.canExecute).toBe(false)
     act(() => result.current.setPW('pw'))
     expect(result.current.canExecute).toBe(true)
+  })
+})
+
+describe('useSwapForm deposit fee', () => {
+  // A native sell asset's spendable balance is net of the deposit fee, so an
+  // estimate that has not arrived must block the swap rather than count as
+  // zero.
+  it('blocks review and execute until the fee is known', async () => {
+    const fee = deferred<any>()
+    vi.mocked(postJSON).mockImplementation(async (path: string) => {
+      if (path === '/api/feestate') return fee.promise
+      if (path === '/api/intents/preview') return { ok: true, preview: previewFor(6e9) }
+      return { ok: false }
+    })
+    const { result } = await renderForm()
+    act(() => result.current.amountChanged('sell', 'asset')(typed('0.5')))
+    await act(async () => { vi.advanceTimersByTime(350) })
+    await flush()
+    expect(result.current.preview).not.toBeNull()
+    expect(result.current.depositFeeReady).toBe(false)
+    expect(result.current.formStatus).toBe('fee')
+    expect(result.current.canExecute).toBe(false)
+
+    // Max waits for the fee too.
+    act(() => result.current.setMax())
+    expect(result.current.amount).toBe('0.5')
+
+    fee.resolve({ ok: true, feeState: { send: 1000 } })
+    await flush()
+    expect(result.current.overBalance).toBe(true)
+    expect(result.current.formStatus).toBe('balance')
+  })
+
+  it('reports a failed estimate and retries on request', async () => {
+    let fail = true
+    vi.mocked(postJSON).mockImplementation(async (path: string) => {
+      if (path === '/api/feestate') return fail ? { ok: false, msg: 'no fee rate' } : { ok: true, feeState: { send: 1000 } }
+      if (path === '/api/intents/preview') return { ok: true, preview: previewFor(6e9) }
+      return { ok: false }
+    })
+    const { result } = await renderForm()
+    act(() => result.current.amountChanged('sell', 'asset')(typed('0.1')))
+    await act(async () => { vi.advanceTimersByTime(350) })
+    await flush()
+    expect(result.current.formStatus).toBe('fee')
+    expect(result.current.depositFeeErr).toBe('no fee rate')
+
+    fail = false
+    act(() => result.current.retryDepositFee())
+    await flush()
+    expect(result.current.depositFeeErr).toBe('')
+    expect(result.current.formStatus).toBe('ready')
+    expect(result.current.canExecute).toBe(true)
+  })
+
+  it('keeps the last estimate across a change of view', async () => {
+    let calls = 0
+    vi.mocked(postJSON).mockImplementation(async (path: string) => {
+      if (path === '/api/feestate') {
+        calls++
+        return calls === 1 ? { ok: true, feeState: { send: 1000 } } : new Promise(() => {})
+      }
+      if (path === '/api/intents/preview') return { ok: true, preview: previewFor(6e9) }
+      return { ok: false }
+    })
+    const onExecuted = vi.fn()
+    const { result, rerender } = renderHook(
+      ({ liveView }: { liveView: 'form' | 'review' }) => useSwapForm({ liveView, onExecuted }),
+      { initialProps: { liveView: 'form' } }
+    )
+    await flush()
+    act(() => result.current.amountChanged('sell', 'asset')(typed('0.1')))
+    await act(async () => { vi.advanceTimersByTime(350) })
+    await flush()
+    expect(result.current.canExecute).toBe(true)
+
+    rerender({ liveView: 'review' })
+    await flush()
+    expect(calls).toBe(2)
+    expect(result.current.depositFee).toBe(1000)
+    expect(result.current.canExecute).toBe(true)
+  })
+
+  it('does not wait on a fee for a token sell asset', async () => {
+    app.user = makeUser([
+      makeAsset(0, 'btc', { unitInfo: makeUnitInfo('BTC'), wallet: makeWallet(0, { balance: balance(5e7) }), token: { networkID: 60 } as any }),
+      makeAsset(60, 'eth', { unitInfo: makeUnitInfo('ETH', 1e9), wallet: makeWallet(60, { balance: balance(2e9) }) }),
+      makeAsset(2, 'ltc', { unitInfo: makeUnitInfo('LTC'), wallet: makeWallet(2) })
+    ])
+    vi.mocked(postJSON).mockImplementation(async (path: string) => {
+      if (path === '/api/feestate') return new Promise(() => {})
+      if (path === '/api/intents/preview') return { ok: true, preview: previewFor(6e9) }
+      return { ok: false }
+    })
+    const { result } = await renderForm()
+    act(() => result.current.amountChanged('sell', 'asset')(typed('0.5')))
+    await act(async () => { vi.advanceTimersByTime(350) })
+    await flush()
+    expect(result.current.depositFeeReady).toBe(true)
+    expect(result.current.formStatus).toBe('ready')
   })
 })

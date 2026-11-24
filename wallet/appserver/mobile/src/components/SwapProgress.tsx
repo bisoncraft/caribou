@@ -1,5 +1,6 @@
 import { ReactNode, useState } from 'react'
 import t, { tvar } from '@caribou/shared/intl'
+import app from '@caribou/shared/application'
 import Doc from '@caribou/shared/doc'
 import { explorerTxURL } from '@caribou/shared/coinexplorers'
 import { useCoreSubscriptions, useFlash, useForceUpdate } from '@caribou/shared/hooks'
@@ -60,6 +61,13 @@ export default function SwapProgressScreen ({ depositAddress }: { depositAddress
     active, depositRejected, step, originTicker, destTicker, amountIn, amountOut,
     rateText, feeBps, refundedText, refundedUSD, feeAsset, feeUSD
   } = swapProgressInfo(swap, depositTx)
+
+  // The refunded amount, falling back to the deposit for an older record
+  // without a resolved refund, as the Activity row does.
+  const originUI = app.user?.assets[swap.originAssetID]?.unitInfo
+  const returnedAmt = originUI && (swap.refundedAtoms ?? 0) > 0
+    ? Doc.formatCoinValue(swap.refundedAtoms ?? 0, originUI)
+    : amountIn
 
   const copy = async (v: string) => {
     if (await copyText(v)) flashCopied()
@@ -143,8 +151,12 @@ export default function SwapProgressScreen ({ depositAddress }: { depositAddress
             {active && !depositRejected && swap.timeEstimate > 0 && (
               <div className='swap-eta'>{tvar('usually ~{{ eta }}', { eta: Doc.formatDuration(swap.timeEstimate * 1000) })}</div>
             )}
+            {/* A refund returns the origin asset, so its headline names the
+                returned amount rather than the quoted output. */}
             <div className='swap-amts mono'>
-              {amountIn} {originTicker} <span className='grey'>→</span> {swap.state === StateSuccess ? '' : '~'}{amountOut} {destTicker}
+              {swap.state === StateRefunded
+                ? tvar('{{ amt }} {{ ticker }} returned', { amt: returnedAmt, ticker: originTicker })
+                : <>{amountIn} {originTicker} <span className='grey'>→</span> {swap.state === StateSuccess ? '' : '~'}{amountOut} {destTicker}</>}
             </div>
             {swap.reconstructed && <span className='swap-recovered'>{t('recovered')}</span>}
           </section>
