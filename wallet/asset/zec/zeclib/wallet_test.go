@@ -807,18 +807,7 @@ func TestTransparentOutputs(t *testing.T) {
 			t.Fatalf("TransparentAddresses: %v, %v", addresses, err)
 		}
 		address := addresses[0]
-		txid := make([]byte, 32)
-		txid[0] = 0xaa
-		e.srv.set(func(s *fakeLwd) {
-			s.utxos[address] = []*walletrpc.GetAddressUtxosReply{{
-				Address:  address,
-				Txid:     txid,
-				Index:    1,
-				Script:   p2pkhScript(address),
-				ValueZat: 123_000,
-				Height:   120,
-			}}
-		})
+		plantFunded(t, e, kind, address, 123_000, 120, 1)
 
 		e.connect()
 		e.waitSynced(150)

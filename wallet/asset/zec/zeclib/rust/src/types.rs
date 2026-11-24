@@ -66,8 +66,15 @@ impl From<&data_api::Balance> for PoolBalance {
 pub struct AccountBalance {
     pub account_uuid: String,
     pub ironwood: PoolBalance,
+    /// The regular transparent outputs: every transparent output whose
+    /// transaction is not known to be a coinbase transaction.
     pub transparent: PoolBalance,
-    /// The sum of the pool totals.
+    /// The transparent outputs of coinbase transactions. A payment never
+    /// spends them.
+    pub coinbase: PoolBalance,
+    /// The sum of the totals of the Ironwood pool, the regular transparent
+    /// outputs and the coinbase outputs: everything the account holds,
+    /// immature coinbase included.
     pub total: u64,
 }
 

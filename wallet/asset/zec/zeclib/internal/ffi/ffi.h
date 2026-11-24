@@ -515,6 +515,66 @@ uint32_t uniffi_zeclib_fn_method_wallet_utxo_query_height(uint64_t ptr, RustBuff
 RustBuffer uniffi_zeclib_fn_method_wallet_wallet_summary(uint64_t ptr, RustBuffer min_confirmations, RustCallStatus *out_status
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_ZECLIB_FN_METHOD_WALLET_MISSING_TRANSACTIONS
+#define UNIFFI_FFIDEF_UNIFFI_ZECLIB_FN_METHOD_WALLET_MISSING_TRANSACTIONS
+RustBuffer uniffi_zeclib_fn_method_wallet_missing_transactions(uint64_t ptr, RustBuffer txids, RustCallStatus *out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_ZECLIB_FN_METHOD_WALLET_OPEN_TRANSACTIONS
+#define UNIFFI_FFIDEF_UNIFFI_ZECLIB_FN_METHOD_WALLET_OPEN_TRANSACTIONS
+RustBuffer uniffi_zeclib_fn_method_wallet_open_transactions(uint64_t ptr, RustBuffer account_uuid, uint32_t depth, RustCallStatus *out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_ZECLIB_FN_METHOD_WALLET_OWNS_ADDRESS
+#define UNIFFI_FFIDEF_UNIFFI_ZECLIB_FN_METHOD_WALLET_OWNS_ADDRESS
+RustBuffer uniffi_zeclib_fn_method_wallet_owns_address(uint64_t ptr, RustBuffer address, RustCallStatus *out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_ZECLIB_FN_METHOD_WALLET_TRANSACTION
+#define UNIFFI_FFIDEF_UNIFFI_ZECLIB_FN_METHOD_WALLET_TRANSACTION
+RustBuffer uniffi_zeclib_fn_method_wallet_transaction(uint64_t ptr, RustBuffer account_uuid, RustBuffer txid, RustCallStatus *out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_ZECLIB_FN_METHOD_WALLET_TRANSACTIONS
+#define UNIFFI_FFIDEF_UNIFFI_ZECLIB_FN_METHOD_WALLET_TRANSACTIONS
+RustBuffer uniffi_zeclib_fn_method_wallet_transactions(uint64_t ptr, RustBuffer account_uuid, uint64_t after_seq, uint32_t limit, RustCallStatus *out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_ZECLIB_FN_METHOD_WALLET_REBROADCAST_INVENTORY
+#define UNIFFI_FFIDEF_UNIFFI_ZECLIB_FN_METHOD_WALLET_REBROADCAST_INVENTORY
+RustBuffer uniffi_zeclib_fn_method_wallet_rebroadcast_inventory(uint64_t ptr, RustCallStatus *out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_ZECLIB_FN_METHOD_WALLET_ESTIMATE_TRANSFER
+#define UNIFFI_FFIDEF_UNIFFI_ZECLIB_FN_METHOD_WALLET_ESTIMATE_TRANSFER
+RustBuffer uniffi_zeclib_fn_method_wallet_estimate_transfer(uint64_t ptr, RustBuffer account_uuid, RustBuffer address, uint64_t amount, RustBuffer memo, RustBuffer min_confirmations, RustCallStatus *out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_ZECLIB_FN_METHOD_WALLET_SEND
+#define UNIFFI_FFIDEF_UNIFFI_ZECLIB_FN_METHOD_WALLET_SEND
+RustBuffer uniffi_zeclib_fn_method_wallet_send(uint64_t ptr, RustBuffer account_uuid, RustBuffer seed, RustBuffer address, uint64_t amount, RustBuffer memo, uint64_t max_fee, RustBuffer min_confirmations, RustCallStatus *out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_ZECLIB_FN_METHOD_WALLET_SPENDABLE
+#define UNIFFI_FFIDEF_UNIFFI_ZECLIB_FN_METHOD_WALLET_SPENDABLE
+RustBuffer uniffi_zeclib_fn_method_wallet_spendable(uint64_t ptr, RustBuffer account_uuid, RustBuffer min_confirmations, RustCallStatus *out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_ZECLIB_FN_METHOD_WALLET_ESTIMATE_SEND_MAX
+#define UNIFFI_FFIDEF_UNIFFI_ZECLIB_FN_METHOD_WALLET_ESTIMATE_SEND_MAX
+RustBuffer uniffi_zeclib_fn_method_wallet_estimate_send_max(uint64_t ptr, RustBuffer account_uuid, RustBuffer address, RustBuffer memo, RustBuffer min_confirmations, RustCallStatus *out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_ZECLIB_FN_METHOD_WALLET_SEND_MAX
+#define UNIFFI_FFIDEF_UNIFFI_ZECLIB_FN_METHOD_WALLET_SEND_MAX
+RustBuffer uniffi_zeclib_fn_method_wallet_send_max(uint64_t ptr, RustBuffer account_uuid, RustBuffer seed, RustBuffer address, RustBuffer memo, uint64_t max_fee, RustBuffer expected_amount, RustBuffer min_confirmations, RustCallStatus *out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_ZECLIB_FN_FUNC_PARSE_ADDRESS
+#define UNIFFI_FFIDEF_UNIFFI_ZECLIB_FN_FUNC_PARSE_ADDRESS
+RustBuffer uniffi_zeclib_fn_func_parse_address(RustBuffer network, RustBuffer address, RustCallStatus *out_status
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_ZECLIB_FN_FUNC_TRANSPARENT_RECEIVER
 #define UNIFFI_FFIDEF_UNIFFI_ZECLIB_FN_FUNC_TRANSPARENT_RECEIVER
 RustBuffer uniffi_zeclib_fn_func_transparent_receiver(RustBuffer network, RustBuffer unified_address, RustCallStatus *out_status
@@ -780,6 +840,12 @@ void ffi_zeclib_rust_future_free_void(uint64_t handle
 void ffi_zeclib_rust_future_complete_void(uint64_t handle, RustCallStatus *out_status
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_ZECLIB_CHECKSUM_FUNC_PARSE_ADDRESS
+#define UNIFFI_FFIDEF_UNIFFI_ZECLIB_CHECKSUM_FUNC_PARSE_ADDRESS
+uint16_t uniffi_zeclib_checksum_func_parse_address(void
+    
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_ZECLIB_CHECKSUM_FUNC_TRANSPARENT_RECEIVER
 #define UNIFFI_FFIDEF_UNIFFI_ZECLIB_CHECKSUM_FUNC_TRANSPARENT_RECEIVER
 uint16_t uniffi_zeclib_checksum_func_transparent_receiver(void
@@ -939,6 +1005,72 @@ uint16_t uniffi_zeclib_checksum_method_wallet_utxo_query_height(void
 #ifndef UNIFFI_FFIDEF_UNIFFI_ZECLIB_CHECKSUM_METHOD_WALLET_WALLET_SUMMARY
 #define UNIFFI_FFIDEF_UNIFFI_ZECLIB_CHECKSUM_METHOD_WALLET_WALLET_SUMMARY
 uint16_t uniffi_zeclib_checksum_method_wallet_wallet_summary(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_ZECLIB_CHECKSUM_METHOD_WALLET_MISSING_TRANSACTIONS
+#define UNIFFI_FFIDEF_UNIFFI_ZECLIB_CHECKSUM_METHOD_WALLET_MISSING_TRANSACTIONS
+uint16_t uniffi_zeclib_checksum_method_wallet_missing_transactions(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_ZECLIB_CHECKSUM_METHOD_WALLET_OPEN_TRANSACTIONS
+#define UNIFFI_FFIDEF_UNIFFI_ZECLIB_CHECKSUM_METHOD_WALLET_OPEN_TRANSACTIONS
+uint16_t uniffi_zeclib_checksum_method_wallet_open_transactions(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_ZECLIB_CHECKSUM_METHOD_WALLET_OWNS_ADDRESS
+#define UNIFFI_FFIDEF_UNIFFI_ZECLIB_CHECKSUM_METHOD_WALLET_OWNS_ADDRESS
+uint16_t uniffi_zeclib_checksum_method_wallet_owns_address(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_ZECLIB_CHECKSUM_METHOD_WALLET_TRANSACTION
+#define UNIFFI_FFIDEF_UNIFFI_ZECLIB_CHECKSUM_METHOD_WALLET_TRANSACTION
+uint16_t uniffi_zeclib_checksum_method_wallet_transaction(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_ZECLIB_CHECKSUM_METHOD_WALLET_TRANSACTIONS
+#define UNIFFI_FFIDEF_UNIFFI_ZECLIB_CHECKSUM_METHOD_WALLET_TRANSACTIONS
+uint16_t uniffi_zeclib_checksum_method_wallet_transactions(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_ZECLIB_CHECKSUM_METHOD_WALLET_REBROADCAST_INVENTORY
+#define UNIFFI_FFIDEF_UNIFFI_ZECLIB_CHECKSUM_METHOD_WALLET_REBROADCAST_INVENTORY
+uint16_t uniffi_zeclib_checksum_method_wallet_rebroadcast_inventory(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_ZECLIB_CHECKSUM_METHOD_WALLET_ESTIMATE_TRANSFER
+#define UNIFFI_FFIDEF_UNIFFI_ZECLIB_CHECKSUM_METHOD_WALLET_ESTIMATE_TRANSFER
+uint16_t uniffi_zeclib_checksum_method_wallet_estimate_transfer(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_ZECLIB_CHECKSUM_METHOD_WALLET_SEND
+#define UNIFFI_FFIDEF_UNIFFI_ZECLIB_CHECKSUM_METHOD_WALLET_SEND
+uint16_t uniffi_zeclib_checksum_method_wallet_send(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_ZECLIB_CHECKSUM_METHOD_WALLET_SPENDABLE
+#define UNIFFI_FFIDEF_UNIFFI_ZECLIB_CHECKSUM_METHOD_WALLET_SPENDABLE
+uint16_t uniffi_zeclib_checksum_method_wallet_spendable(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_ZECLIB_CHECKSUM_METHOD_WALLET_ESTIMATE_SEND_MAX
+#define UNIFFI_FFIDEF_UNIFFI_ZECLIB_CHECKSUM_METHOD_WALLET_ESTIMATE_SEND_MAX
+uint16_t uniffi_zeclib_checksum_method_wallet_estimate_send_max(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_ZECLIB_CHECKSUM_METHOD_WALLET_SEND_MAX
+#define UNIFFI_FFIDEF_UNIFFI_ZECLIB_CHECKSUM_METHOD_WALLET_SEND_MAX
+uint16_t uniffi_zeclib_checksum_method_wallet_send_max(void
     
 );
 #endif

@@ -29,6 +29,16 @@ zcash_protocol = { version = "=0.11.0", features = ["local-consensus"] }
 transparent = { package = "zcash_transparent", version = "=0.11.0", features = ["transparent-inputs"] }
 orchard = { version = "0.16", default-features = false }
 zcash_script = "0.6"
+zip321 = "0.10"
+# For building a send max proposal and for mapping note commitment tree
+# errors. The versions librustzcash uses.
+nonempty = "0.11"
+shardtree = "0.8"
+# The Sapling prover traits, for the stand-in that builds no Sapling proofs.
+# The versions are the ones librustzcash already depends on.
+sapling = { package = "sapling-crypto", version = "0.9", default-features = false, features = ["circuit"] }
+jubjub = { version = "0.11", default-features = false }
+bls12_381 = { version = "0.9", default-features = false }
 
 hex = "0.4"
 prost = "0.14"
@@ -40,6 +50,10 @@ uuid = "1"
 
 [dev-dependencies]
 tempfile = "3"
+# For building a Sapling input by hand in tests. The versions librustzcash
+# uses.
+incrementalmerkletree = "0.9"
+zip32 = "0.3"
 
 [profile.release]
 # Panics must unwind. error::guard turns a panic in an exported call into

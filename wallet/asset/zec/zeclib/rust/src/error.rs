@@ -63,6 +63,63 @@ pub enum WalletError {
     #[error("scan error at height {at_height}: {message}")]
     Scan { at_height: u32, message: String },
 
+    /// The account's spendable funds do not cover the payment and its fee.
+    /// Both values are in zatoshis. `required` includes the fee.
+    #[error("insufficient funds: {available} available, {required} required")]
+    InsufficientFunds { available: u64, required: u64 },
+
+    /// The wallet has not scanned far enough to build a transaction: it lacks
+    /// a chain tip or a note commitment tree anchor. Syncing resolves it.
+    #[error("the wallet is not synced far enough to send: {message}")]
+    NotSynced { message: String },
+
+    /// The fee of the transaction exceeds the limit the caller set.
+    #[error("the fee {fee} exceeds the limit {max_fee}")]
+    FeeTooHigh { fee: u64, max_fee: u64 },
+
+    /// The recipient cannot be paid by this wallet: an address of another
+    /// network, a Sapling address, a TEX address, or a unified address
+    /// without an Orchard or a transparent receiver.
+    #[error("unsupported recipient: {message}")]
+    UnsupportedRecipient { message: String },
+
+    /// A send max would pay another amount than the caller expected, because
+    /// the spendable inputs changed since the amount was estimated. Nothing
+    /// was created.
+    #[error("the amount changed from {expected} to {actual} zatoshis")]
+    AmountChanged { expected: u64, actual: u64 },
+
+    /// The transaction would be larger than a block can hold, typically for
+    /// spending too many inputs. Nothing was created. A smaller payment, or
+    /// one made after some of the inputs have been consolidated, can succeed.
+    #[error("the transaction is too large: {message}")]
+    TooLarge { message: String },
+
+    /// The recipient's unified address has expired, or expires before the
+    /// transaction would (ZIP 316).
+    #[error("the address has expired: {message}")]
+    AddressExpired { message: String },
+
+    /// The amount of a payment to a transparent receiver is below the
+    /// smallest output that nodes relay, `minimum` zatoshis.
+    #[error("the amount is below the smallest transparent output of {minimum} zatoshis")]
+    AmountBelowMinimum { minimum: u64 },
+
+    /// A memo was given for a payment to a transparent receiver, which cannot
+    /// carry one.
+    #[error("a memo cannot be sent to a transparent recipient")]
+    MemoNotAllowed,
+
+    /// The seed given to spend from an account is not the seed the account
+    /// was derived from.
+    #[error("the seed does not belong to the account")]
+    SeedMismatch,
+
+    /// A transaction could not be proposed or created for a reason without
+    /// its own variant.
+    #[error("send: {message}")]
+    Send { message: String },
+
     /// A bug: a panic was caught at the FFI boundary.
     #[error("internal error: {message}")]
     Internal { message: String },

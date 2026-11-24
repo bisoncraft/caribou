@@ -3,8 +3,12 @@
 
 /*
 Package zeclib is a Zcash light wallet backend for Go. It keeps a wallet
-database in sync with the chain through a lightwalletd server, and reports
-accounts, addresses, balances and sync progress.
+database in sync with the chain through a lightwalletd server, reports
+accounts, addresses, balances, sync progress and the history of
+transactions, and sends payments. Config.OnChange tells a consumer when the
+database may have changed, and Config.OnRewind when the wallet rewound. [ParseAddress] reads an address without a wallet,
+and [Wallet.HeightForTime] finds a birthday height for a seed's creation
+time.
 
 Ironwood, the pool added by NU6.3, is the only shielded pool the wallet
 supports. An account holds funds in the Ironwood pool and in transparent
@@ -17,7 +21,9 @@ the Zcash Android wallet SDK is:
   - A Rust crate (the rust directory) wraps the librustzcash wallet database
     in a small set of synchronous calls: create an account, store subtree
     roots, update the chain tip, suggest scan ranges, scan a batch of blocks,
-    rewind. It does no networking and starts no threads.
+    rewind, store full transactions and unspent outputs, estimate and create
+    transactions, list the history, and parse addresses. It does no
+    networking and starts no threads.
   - Package walletrpc is the lightwalletd gRPC client, generated from the
     protocol's .proto files.
   - This package talks to the server, decides what to download, hands blocks
@@ -75,7 +81,10 @@ README.md.
 
 A lightwalletd server learns the block ranges a wallet downloads, the
 transparent addresses it asks about, the IDs of the transactions it fetches
-in full, and the birthday of an account created with [Wallet.CreateAccount].
+in full (among them the transaction of each unspent transparent output the
+wallet records), the transactions the wallet broadcasts and checks on, and
+the birthday of an account created with [Wallet.CreateAccount] or looked up
+with [Wallet.HeightForTime].
 [Wallet.CreateAccountWithTreeState] keeps the birthday from the server, and
 Config.Dialer routes the connection through a proxy.
 */

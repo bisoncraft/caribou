@@ -55,6 +55,29 @@ type Config struct {
 	// for that goroutine. Cancelling the context of Connect and reading
 	// from the wallet are safe.
 	OnSyncStatus func(SyncStatus)
+	// OnChange, if set, is called after the sync loop wrote to the wallet
+	// database in a way that can change balances or the history: a scanned
+	// batch of blocks, a rewind, stored transaction data (from the
+	// enhancement of transactions, the funding transactions of unspent
+	// outputs and the history of addresses) and recorded unspent outputs.
+	// Calls are at least a second apart while a cycle runs, and a change
+	// still waiting at the end of a cycle is reported then. A consumer reads
+	// what it needs and compares it with what it holds; the call says only
+	// that something may have changed. It follows the rules of
+	// OnSyncStatus: it is called from the goroutine that syncs the wallet
+	// and must not block. A consumer hands the work to a goroutine of its
+	// own, for example by a non-blocking send on a channel with a buffer
+	// of one. Reading or writing in the callback stalls the sync; taking a
+	// lock that is held across Close deadlocks it.
+	OnChange func()
+	// OnRewind, if set, is called after the sync loop rewound the wallet
+	// to height, once per rewind, before the blocks above it are scanned
+	// again. A transaction above the height can be rescanned at another
+	// height without ever looking unmined to a consumer that reads only on
+	// OnChange, so a consumer that keeps a copy of the history uses this to
+	// read it again in full. It follows the rules of OnChange, and is not
+	// coalesced with it.
+	OnRewind func(height uint32)
 
 	// PollInterval is how often a synced wallet asks the server for new
 	// blocks. Each wait is randomized by a quarter either way, so that the

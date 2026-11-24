@@ -14,3 +14,8 @@ func openBackend(string, Network, []byte) (backend, error) {
 func transparentReceiver(Network, string) (string, error) {
 	return "", ErrNotBuilt
 }
+
+// parseAddress reports that the Rust backend is not compiled in.
+func parseAddress(Network, string) (*ParsedAddress, error) {
+	return nil, ErrNotBuilt
+}

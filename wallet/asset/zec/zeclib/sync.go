@@ -79,9 +79,12 @@ type SyncStatus struct {
 	RecoveryProgress Ratio
 	Recovering       bool
 	// Err is the error that ended the last sync attempt. It is nil after
-	// an attempt that succeeded. The wallet retries on its own whatever the
-	// error is. ErrWrongNetwork, ErrReorgTooDeep and an ErrConsensusBranch
-	// that every server gives do not go away without intervention.
+	// an attempt that succeeded, except for ErrOutputUnrecorded, which an
+	// attempt that succeeded reports together with SyncSynced. The wallet
+	// retries on its own whatever the error is. ErrWrongNetwork,
+	// ErrReorgTooDeep and an ErrConsensusBranch that every server gives do
+	// not go away without intervention. Err does not say by itself that the
+	// server is lost: State does.
 	Err error
 	// TransparentErr is the error of the last failed attempt to update the
 	// wallet's transparent addresses: to fetch their history and their
@@ -161,7 +164,14 @@ type syncOptions struct {
 	// stale. Zero turns the check off.
 	staleLag            uint64
 	serverCheckInterval time.Duration
-	now                 func() time.Time
+	// rebroadcastMinDelay and rebroadcastMaxDelay bound the delay between
+	// two checks of a transaction the wallet created (see rebroadcast).
+	rebroadcastMinDelay time.Duration
+	rebroadcastMaxDelay time.Duration
+	// onChange is Config.OnChange, and onRewind Config.OnRewind.
+	onChange func()
+	onRewind func(height uint32)
+	now      func() time.Time
 }
 
 func syncOptionsFor(cfg *Config) syncOptions {
@@ -174,6 +184,10 @@ func syncOptionsFor(cfg *Config) syncOptions {
 		minConfirmations:     cfg.MinConfirmations,
 		addressCheckInterval: defaultAddressCheckInterval,
 		serverCheckInterval:  defaultServerCheckInterval,
+		rebroadcastMinDelay:  defaultRebroadcastMinDelay,
+		rebroadcastMaxDelay:  defaultRebroadcastMaxDelay,
+		onChange:             cfg.OnChange,
+		onRewind:             cfg.OnRewind,
 		now:                  time.Now,
 	}
 	// A regtest chain grows when someone mines, and its tip can be of any
@@ -262,6 +276,36 @@ type processor struct {
 	// transparentRetryAt.
 	transparentFailures int
 	transparentRetryAt  time.Time
+
+	// fundDeferred holds the funding transactions of unspent outputs that
+	// could not be stored, by transaction ID, for the accounts of every
+	// account's query.
+	fundDeferred map[string]deferredRequest
+	// recordedUTXOs holds the unspent outputs this processor has recorded,
+	// by transaction ID, index and height, so that recording one again
+	// reports no change. A rewind clears it.
+	recordedUTXOs map[string]struct{}
+	// unrecorded holds, by account ID, why some of the account's unspent
+	// outputs could not be recorded in its last query. It is reported in
+	// SyncStatus.Err after a cycle that otherwise succeeded.
+	unrecorded map[string]error
+
+	// rebroadcasts holds the rebroadcast state of the transactions in the
+	// wallet's rebroadcast inventory, by transaction ID, and rebroadcastAt
+	// the earliest time one of them is due for a check, zero if none is.
+	rebroadcasts  map[string]*rebroadcastState
+	rebroadcastAt time.Time
+	// inventoryReadAt is when the rebroadcast inventory was last read, and
+	// checksHeldUntil the time before which no transaction is checked,
+	// after a check found the server unreachable.
+	inventoryReadAt time.Time
+	checksHeldUntil time.Time
+
+	// changePending is set while a write to the wallet database waits to be
+	// reported through Config.OnChange, and lastChange is when it was last
+	// called.
+	changePending bool
+	lastChange    time.Time
 }
 
 // deferredRequest is a transaction data request that is not tried again
@@ -269,6 +313,8 @@ type processor struct {
 type deferredRequest struct {
 	failures int
 	retryAt  time.Time
+	// err is the failure that deferred it.
+	err error
 }
 
 func newProcessor(log util.Logger, network Network, be backend, src chainSource, opts syncOptions, update func(func(*SyncStatus))) *processor {
@@ -294,6 +340,7 @@ func (p *processor) run(ctx context.Context) {
 	for {
 		p.progressed = false
 		again, err := p.cycle(ctx)
+		p.flushChange()
 		if ctx.Err() != nil {
 			return
 		}
@@ -353,9 +400,10 @@ func (p *processor) run(ctx context.Context) {
 		default:
 			failures = 0
 			p.chainErrors = 0
+			unrecorded := p.unrecordedErr()
 			p.update(func(s *SyncStatus) {
 				s.State = SyncSynced
-				s.Err = nil
+				s.Err = unrecorded
 			})
 			wait = jitter(p.opts.pollInterval)
 		}
@@ -454,15 +502,20 @@ func (p *processor) rotateAfter(err error) bool {
 // cycle brings the wallet up to the server's chain tip once. It returns
 // true if it rewound the wallet and has to be run again at once.
 //
-// An attempt has three steps: the chain tip, the transparent addresses, and
-// the blocks. The second is before the third so that a restore, which can
-// scan for hours in one attempt, learns of transparent funds first. A failure
-// of the server to answer for the transparent addresses does not end the
-// attempt: syncAddresses reports it on its own.
+// An attempt has four steps: the chain tip, the transactions the wallet
+// created that are not mined, the transparent addresses, and the blocks. The
+// second is after the first so that a transaction past its expiry at the new
+// tip is not sent again. The third is before the fourth so that a restore,
+// which can scan for hours in one attempt, learns of transparent funds first.
+// A failure of the server to answer for the transparent addresses does not
+// end the attempt: syncAddresses reports it on its own.
 func (p *processor) cycle(ctx context.Context) (again bool, err error) {
 	tip, again, err := p.syncTip(ctx)
 	if err != nil || again {
 		return again, err
+	}
+	if err := p.rebroadcast(ctx); err != nil {
+		return false, err
 	}
 	if err := p.syncAddresses(ctx, tip); err != nil {
 		return false, err
@@ -629,9 +682,17 @@ func (p *processor) syncBlocks(ctx context.Context, tipHeight uint32) (rewound b
 		}
 		p.serverWorked()
 		p.progressed = true
+		p.noteChange()
 		p.log.Debugf("Scanned blocks %d to %d of range %s", summary.start, summary.end-1, next)
 		if err := p.refreshSummary(); err != nil {
 			return false, err
+		}
+		// A long scan, such as a catch-up after the wallet slept, could
+		// outlast the expiry of a transaction waiting to be broadcast.
+		if p.rebroadcastDue() {
+			if err := p.rebroadcast(ctx); err != nil {
+				return false, err
+			}
 		}
 	}
 
@@ -862,11 +923,16 @@ func (p *processor) rewind(staleHeight, tipHeight uint32) error {
 	if err != nil {
 		return err
 	}
+	p.noteChange()
+	if p.opts.onRewind != nil {
+		p.opts.onRewind(height)
+	}
 	p.log.Infof("Rewound the wallet to height %d", height)
 	// Rewinding also forgets where the transparent outputs above the rewind
 	// height were mined, so they are fetched again even at an unchanged
 	// tip.
 	p.utxoQueries = nil
+	p.recordedUTXOs = nil
 
 	// Rewinding shortens the wallet's scan queue to the rewind height.
 	// Without telling it the tip again it would consider itself synced
@@ -947,6 +1013,9 @@ func (p *processor) walkAddresses(ctx context.Context, tipHeight uint32) (walked
 			}
 			err := p.src.addressTransactions(ctx, address, start, tipHeight, func(tx *walletrpc.RawTransaction) error {
 				_, err := p.be.decryptAndStoreTransaction(tx.Data, nil, minedHeight(tx))
+				if err == nil {
+					p.noteChange()
+				}
 				if err != nil && !errors.Is(err, ErrDatabase) && !errors.Is(err, ErrClosed) {
 					// One transaction the wallet cannot read must not
 					// hold up the rest of the walk.
@@ -998,9 +1067,13 @@ func (p *processor) walkAddresses(ctx context.Context, tipHeight uint32) (walked
 // addresses and start height changes only with the chain tip. An account is
 // asked about again when one of the three has changed, and not on every
 // poll: each query shows the server all of the account's addresses together.
+// An account with an output that could not be recorded is asked about again
+// at every refresh until it is. syncAddresses makes no refresh while the
+// requests for the transparent addresses are put off after a failure.
 //
 // A query that the server fails, or answers with a malformed output, ends
-// the refresh, and its error is returned as failed. A server can lack the
+// the refresh, and its error is returned as failed. So does a connection
+// that fails while a funding transaction is fetched. A server can lack the
 // call, or have a node that cannot answer it, and still serve blocks. err is
 // an error that ends the sync attempt: a failed check of the server, an
 // error of the wallet database, or a cancelled context.
@@ -1009,6 +1082,9 @@ func (p *processor) refreshUTXOs(ctx context.Context, tipHeight uint32, tipHash 
 	if err != nil {
 		return nil, err
 	}
+	// waiting collects the funding transactions that wait for a retry,
+	// over every account queried.
+	waiting := make(map[string]struct{})
 	for i := range accounts {
 		id := accounts[i].ID
 		watched, err := p.be.transparentReceivers(id)
@@ -1033,17 +1109,13 @@ func (p *processor) refreshUTXOs(ctx context.Context, tipHeight uint32, tipHash 
 		if err := p.checkServerWhenDue(ctx); err != nil {
 			return nil, err
 		}
+		var replies []*walletrpc.GetAddressUtxosReply
 		err = p.src.addressUTXOs(ctx, addresses, start, func(u *walletrpc.GetAddressUtxosReply) error {
-			if u.ValueZat < 0 || u.Index < 0 || u.Height > math.MaxUint32 {
+			if u.ValueZat < 0 || u.Index < 0 || u.Height > math.MaxUint32 || len(u.Txid) != 32 {
 				return &serverError{"GetAddressUtxosStream", errors.New("malformed output")}
 			}
-			return p.be.putUTXO(&utxo{
-				txid:   u.Txid,
-				index:  uint32(u.Index),
-				script: u.Script,
-				value:  uint64(u.ValueZat),
-				height: uint32(u.Height),
-			})
+			replies = append(replies, u)
+			return nil
 		})
 		switch {
 		case err == nil:
@@ -1052,12 +1124,226 @@ func (p *processor) refreshUTXOs(ctx context.Context, tipHeight uint32, tipHash 
 		default:
 			return err, nil
 		}
+		// An output is recorded only once its funding transaction is
+		// stored, so that the wallet knows whether it is a coinbase output.
+		unstored, failed, err := p.storeFundingTransactions(ctx, replies)
+		if err != nil || failed != nil {
+			return failed, err
+		}
+		var notRecorded int
+		var lastErr error
+		for key, err := range unstored {
+			waiting[key] = struct{}{}
+			lastErr = err
+		}
+		for _, u := range replies {
+			if _, skip := unstored[string(u.Txid)]; skip {
+				notRecorded++
+				continue
+			}
+			err := p.be.putUTXO(&utxo{
+				txid:   u.Txid,
+				index:  uint32(u.Index),
+				script: u.Script,
+				value:  uint64(u.ValueZat),
+				height: uint32(u.Height),
+			})
+			if errors.Is(err, ErrInvalidArgument) {
+				// The server's output is not one its transaction has.
+				notRecorded++
+				lastErr = err
+				p.log.Warnf("An unspent output %s:%d reported by the server is not recorded: %v",
+					displayTxID(u.Txid), u.Index, err)
+				continue
+			}
+			if err != nil {
+				return nil, err
+			}
+			key := fmt.Sprintf("%x:%d:%d", u.Txid, u.Index, u.Height)
+			if _, ok := p.recordedUTXOs[key]; !ok {
+				if p.recordedUTXOs == nil {
+					p.recordedUTXOs = make(map[string]struct{})
+				}
+				p.recordedUTXOs[key] = struct{}{}
+				p.noteChange()
+			}
+		}
+		// The query is asked again at the next refresh until every output
+		// is recorded.
+		if notRecorded > 0 {
+			if p.unrecorded == nil {
+				p.unrecorded = make(map[string]error)
+			}
+			p.unrecorded[id] = wrapf(ErrOutputUnrecorded, "%d of the %d unspent outputs of account %s: %v",
+				notRecorded, len(replies), id, lastErr)
+			continue
+		}
+		delete(p.unrecorded, id)
 		if p.utxoQueries == nil {
 			p.utxoQueries = make(map[string]string)
 		}
 		p.utxoQueries[id] = query
 	}
+	// A transaction that no query waits for any more needs no retry. An
+	// account whose query was not asked has no transaction waiting: its
+	// query is kept only once every output is recorded.
+	for key := range p.fundDeferred {
+		if _, ok := waiting[key]; !ok {
+			delete(p.fundDeferred, key)
+		}
+	}
 	return nil, nil
+}
+
+// unrecordedErr returns an error for the unspent outputs that could not be
+// recorded, nil if every output was.
+func (p *processor) unrecordedErr() error {
+	ids := make([]string, 0, len(p.unrecorded))
+	for id := range p.unrecorded {
+		ids = append(ids, id)
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+	slices.Sort(ids)
+	return p.unrecorded[ids[0]]
+}
+
+// storeFundingTransactions fetches and stores the funding transactions of
+// unspent outputs that the wallet does not hold yet, and returns those it
+// could not store, by transaction ID, with the reason. A transaction the
+// wallet stores from its full data is classified: a coinbase transaction is
+// marked as one, and its outputs are never selected by a payment. An output
+// recorded without its transaction would be taken for a regular one.
+//
+// A transaction that cannot be fetched or stored is tried again after a
+// delay that doubles with each failure, and its outputs wait: one the server
+// does not know or refuses, one the server reports other than mined at the
+// height it listed the outputs at, one that is not the transaction asked for,
+// and one the wallet does not keep because it does not involve the wallet. A
+// transaction whose outputs are listed at two heights waits too, held or
+// not, and a held one is not fetched.
+//
+// A failure of the connection ends the fetches and is returned as failed.
+// err is an error that ends the sync attempt: a failed check of the server,
+// an error of the wallet database, or a cancelled context.
+func (p *processor) storeFundingTransactions(ctx context.Context, replies []*walletrpc.GetAddressUtxosReply) (unstored map[string]error, failed, err error) {
+	var txids [][]byte
+	// listedAt is the height the outputs of each transaction were listed
+	// at, and inconsistent holds the transactions listed at two heights.
+	listedAt := make(map[string]uint32)
+	inconsistent := make(map[string]struct{})
+	for _, u := range replies {
+		key := string(u.Txid)
+		h, ok := listedAt[key]
+		if !ok {
+			listedAt[key] = uint32(u.Height)
+			txids = append(txids, u.Txid)
+		} else if h != uint32(u.Height) {
+			inconsistent[key] = struct{}{}
+		}
+	}
+	if len(txids) == 0 {
+		return nil, nil, nil
+	}
+	missing, err := p.be.missingTransactions(txids)
+	if err != nil {
+		return nil, nil, err
+	}
+	unstored = make(map[string]error)
+	// A listing that puts outputs of one transaction at two heights is
+	// stale, whether or not the wallet holds the transaction: none of its
+	// outputs is recorded, and the query is asked again. A held transaction
+	// needs no fetch, so it waits without a backoff.
+	for key := range inconsistent {
+		unstored[key] = errFundingInconsistent
+	}
+	for _, txid := range missing {
+		key := string(txid)
+		if d, ok := p.fundDeferred[key]; ok && p.opts.now().Before(d.retryAt) {
+			unstored[key] = d.err
+			continue
+		}
+		if err := ctx.Err(); err != nil {
+			return nil, nil, err
+		}
+		err := errFundingInconsistent
+		if _, bad := inconsistent[key]; !bad {
+			if err = p.checkServerWhenDue(ctx); err != nil {
+				return nil, nil, err
+			}
+			err = p.storeFundingTransaction(ctx, txid, listedAt[key])
+		}
+		switch {
+		case err == nil:
+			delete(p.fundDeferred, key)
+		case ctx.Err() != nil || errors.Is(err, ErrDatabase) || errors.Is(err, ErrClosed):
+			return nil, nil, err
+		case isConnectionError(err):
+			return nil, err, nil
+		default:
+			unstored[key] = err
+			d := p.fundDeferred[key]
+			d.failures++
+			d.err = err
+			wait := backoff(d.failures, p.opts.minBackoff, p.opts.maxBackoff)
+			d.retryAt = p.opts.now().Add(wait)
+			if p.fundDeferred == nil {
+				p.fundDeferred = make(map[string]deferredRequest)
+			}
+			p.fundDeferred[key] = d
+			p.log.Warnf("The funding transaction %s of an unspent output could not be stored and is tried again in %s; the output waits: %v",
+				displayTxID(txid), wait.Round(time.Millisecond), err)
+		}
+	}
+	return unstored, nil, nil
+}
+
+var (
+	// errFundingUnknown is the failure of a funding transaction the server
+	// does not know.
+	errFundingUnknown = errors.New("the server does not know the transaction")
+	// errFundingInconsistent is the failure of a funding transaction whose
+	// outputs the server listed at two heights.
+	errFundingInconsistent = errors.New("the server listed the outputs of the transaction at different heights")
+	// errFundingNotKept is the failure of a funding transaction the wallet
+	// did not keep, as one that does not involve it.
+	errFundingNotKept = errors.New("the transaction does not pay the wallet")
+)
+
+// storeFundingTransaction fetches one funding transaction, whose outputs the
+// server listed at listedAt, and stores it.
+//
+// The fetch has to agree with the listing. A transaction the server reports
+// in its mempool, on a fork, or mined at another height has been moved by a
+// reorganization since the listing, and is not stored with a height the
+// listing no longer supports: the listing is stale, and the outputs wait
+// for the next query. The transaction stored is checked to be the one asked
+// for, and to be held afterwards.
+func (p *processor) storeFundingTransaction(ctx context.Context, txid []byte, listedAt uint32) error {
+	tx, err := p.src.transaction(ctx, txid)
+	if err != nil {
+		return err
+	}
+	if tx == nil {
+		return errFundingUnknown
+	}
+	if h := minedHeight(tx); h == nil || *h != listedAt {
+		return fmt.Errorf("the outputs were listed at height %d and the server reports the transaction at height %d",
+			listedAt, tx.Height)
+	}
+	if _, err := p.be.decryptAndStoreTransaction(tx.Data, txid, minedHeight(tx)); err != nil {
+		return err
+	}
+	p.noteChange()
+	missing, err := p.be.missingTransactions([][]byte{txid})
+	if err != nil {
+		return err
+	}
+	if len(missing) > 0 {
+		return errFundingNotKept
+	}
+	return nil
 }
 
 // batchEnd returns the last height of the batch that starts a scan of r.
@@ -1177,6 +1463,7 @@ func (p *processor) enhance(ctx context.Context, tipHeight uint32) error {
 			case err == nil:
 				delete(p.deferred, key)
 				fresh = true
+				p.noteChange()
 			case ctx.Err() != nil || errors.Is(err, ErrDatabase) || isConnectionError(err):
 				return err
 			default:
@@ -1276,9 +1563,14 @@ func (p *processor) answer(ctx context.Context, req *txRequest, tipHeight uint32
 		// in its checks of ephemeral addresses, which hold funds only
 		// while a payment to a TEX address (ZIP 320) is under way. Sending
 		// such payments needs the mempool part answered as well.
+		// Each stored transaction is reported as a change at once: a later
+		// failure of the stream or of closing the request does not undo it.
 		err := p.src.addressTransactions(ctx, req.address, req.start, last, func(tx *walletrpc.RawTransaction) error {
-			_, err := p.be.decryptAndStoreTransaction(tx.Data, nil, minedHeight(tx))
-			return err
+			if _, err := p.be.decryptAndStoreTransaction(tx.Data, nil, minedHeight(tx)); err != nil {
+				return err
+			}
+			p.noteChange()
+			return nil
 		})
 		if err != nil {
 			return err

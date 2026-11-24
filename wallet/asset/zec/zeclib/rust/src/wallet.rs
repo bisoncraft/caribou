@@ -7,6 +7,7 @@ use std::time::{Duration, UNIX_EPOCH};
 
 use prost::Message;
 use rand::{rand_core::UnwrapErr, rngs::SysRng};
+use rusqlite::OptionalExtension;
 use secrecy::SecretVec;
 use transparent::{
     address::Script,
@@ -26,7 +27,10 @@ use zcash_client_backend::{
     proto::service::TreeState,
     wallet::WalletTransparentOutput,
 };
-use zcash_client_sqlite::{AccountUuid, WalletDb, util::SystemClock, wallet::init::init_wallet_db};
+use zcash_client_sqlite::{
+    AccountUuid, WalletDb, error::SqliteClientError, util::SystemClock,
+    wallet::init::init_wallet_db,
+};
 use zcash_keys::{
     address::Address,
     encoding::AddressCodec,
@@ -134,6 +138,13 @@ pub struct Wallet {
     network: Network,
     params: Params,
     db: Mutex<Db>,
+    /// A read-only connection to the same database, for queries that the
+    /// wallet traits do not offer. It is used only while `db` is locked, so
+    /// it never reads while the main connection writes. The lock order is
+    /// `db`, then `reader`. It has no `rarray()` table function, which
+    /// `WalletDb` loads on the main connection only, so a query that needs
+    /// one does not run here.
+    reader: Mutex<rusqlite::Connection>,
 }
 
 impl Wallet {
@@ -143,6 +154,11 @@ impl Wallet {
     /// the poison flag is ignored.
     fn db(&self) -> MutexGuard<'_, Db> {
         self.db.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// Locks the read-only connection. The caller holds the `db` lock.
+    fn reader(&self) -> MutexGuard<'_, rusqlite::Connection> {
+        self.reader.lock().unwrap_or_else(|e| e.into_inner())
     }
 
     fn account(&self, db: &Db, uuid: AccountUuid) -> Result<Account, WalletError> {
@@ -164,6 +180,76 @@ impl Wallet {
             key_source: account.source().key_source().map(str::to_owned),
         })
     }
+}
+
+/// The confirmations policy for a `min_confirmations` argument. Unset selects
+/// the ZIP 315 policy: 3 confirmations for outputs of the wallet's own
+/// transactions and 10 for everything else. A number applies to both. Under
+/// either, a transparent output can be spent as soon as it is known.
+///
+/// The balances of [`Wallet::wallet_summary`] and the inputs a send selects
+/// use the same policy for the same argument.
+pub(crate) fn confirmations_policy(
+    min_confirmations: Option<u32>,
+) -> Result<ConfirmationsPolicy, WalletError> {
+    Ok(match min_confirmations {
+        None => ConfirmationsPolicy::default(),
+        Some(n) => ConfirmationsPolicy::new_symmetrical(
+            NonZeroU32::new(n)
+                .ok_or_else(|| WalletError::invalid("min_confirmations must be at least 1"))?,
+            true,
+        ),
+    })
+}
+
+/// Parses a transaction the wallet holds. Transactions before v5 do not
+/// encode their consensus branch, so it is taken from the height the
+/// transaction was mined at, or for an unmined one, the height above the
+/// chain tip.
+///
+/// A held transaction that does not parse is a fault of the database: the
+/// wallet parsed it when it stored it.
+fn parse_held(
+    params: &Params,
+    db: &Db,
+    raw: &[u8],
+    mined_height: Option<BlockHeight>,
+) -> Result<Transaction, WalletError> {
+    let branch_height = match mined_height {
+        Some(h) => h,
+        None => db
+            .chain_height()?
+            .map_or(BlockHeight::from_u32(0), |tip| tip + 1),
+    };
+    Transaction::read(raw, BranchId::for_height(params, branch_height))
+        .map_err(|e| WalletError::database(format!("a stored transaction cannot be parsed: {e}")))
+}
+
+/// The transactions whose coinbase mark a rewind can clear: those the wallet
+/// holds the raw bytes of, that pay a transparent output to the wallet, and
+/// whose index in the block is 0 (a coinbase transaction) or unknown. Only
+/// their IDs are read.
+///
+/// zcash_client_sqlite marks a coinbase transaction by its index in the block
+/// (`tx_index = 0`) when it stores the full transaction, and treats an output
+/// whose transaction has no index as a regular output, which a payment may
+/// select. A rewind clears the index of the transactions it unmines and keeps
+/// their raw bytes and transparent outputs.
+fn coinbase_candidates(reader: &rusqlite::Connection) -> Result<Vec<TxId>, WalletError> {
+    let mut stmt = reader
+        .prepare_cached(
+            "SELECT t.txid FROM transactions t
+             WHERE t.raw IS NOT NULL AND (t.tx_index IS NULL OR t.tx_index = 0)
+               AND EXISTS (SELECT 1 FROM transparent_received_outputs o
+                           WHERE o.transaction_id = t.id_tx)",
+        )
+        .map_err(WalletError::database)?;
+    let ids: Vec<Vec<u8>> = stmt
+        .query_map([], |row| row.get(0))
+        .map_err(WalletError::database)?
+        .collect::<Result<_, _>>()
+        .map_err(WalletError::database)?;
+    ids.iter().map(|id| parse_txid(id)).collect()
 }
 
 fn parse_account(uuid: &str) -> Result<AccountUuid, WalletError> {
@@ -248,11 +334,23 @@ impl Wallet {
                 .map_err(WalletError::database)?
                 .with_anchor_retention_interval(anchor_retention_interval(params.network_type()));
             init_wallet_db(&mut db, seed).map_err(migration_error)?;
+            // The reader is safe only because every write to the file goes
+            // through `db`, under the same mutex. That holds while one
+            // `Wallet` at a time has the file open, which is the rule for
+            // every caller: two wallets on one file would also select the
+            // same inputs for two sends.
+            let reader = rusqlite::Connection::open_with_flags(
+                &db_path,
+                rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY
+                    | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+            )
+            .map_err(WalletError::database)?;
 
             Ok(Arc::new(Wallet {
                 network,
                 params,
                 db: Mutex::new(db),
+                reader: Mutex::new(reader),
             }))
         })
     }
@@ -636,12 +734,33 @@ impl Wallet {
     /// Checkpoints are made for the tree state a scanned batch starts from,
     /// for every block that adds a note commitment, and from NU6.3 on for
     /// every height of the anchor grid.
+    ///
+    /// The coinbase transactions the rewind unmines are marked as coinbase
+    /// again in the same database transaction. A held transaction that
+    /// cannot be read fails the call and nothing is rewound.
     pub fn rewind_to_height(&self, height: u32) -> Result<u32, WalletError> {
         guard(|| {
-            Ok(self
-                .db()
-                .truncate_to_height(BlockHeight::from_u32(height))?
-                .into())
+            let mut db = self.db();
+            let candidates = coinbase_candidates(&self.reader())?;
+            // The rewind and the repair of the coinbase marks it clears are
+            // one database transaction: if a candidate cannot be read or
+            // stored again, nothing is rewound, and a coinbase output is
+            // never left looking like a regular one, not even by a crash
+            // between the two.
+            let rewound = db.transactionally(|wdb| {
+                let rewound = wdb.truncate_to_height(BlockHeight::from_u32(height))?;
+                for txid in candidates {
+                    let Some(tx) = wdb.get_transaction(txid)? else {
+                        continue;
+                    };
+                    if tx.transparent_bundle().is_some_and(|b| b.is_coinbase()) {
+                        let mined_height = wdb.get_tx_height(txid)?;
+                        decrypt_and_store_transaction(&self.params, wdb, &tx, mined_height)?;
+                    }
+                }
+                Ok::<_, SqliteClientError>(rewound)
+            })?;
+            Ok(rewound.into())
         })
     }
 
@@ -658,15 +777,7 @@ impl Wallet {
         min_confirmations: Option<u32>,
     ) -> Result<Option<WalletSummary>, WalletError> {
         guard(|| {
-            let policy = match min_confirmations {
-                None => ConfirmationsPolicy::default(),
-                Some(n) => ConfirmationsPolicy::new_symmetrical(
-                    NonZeroU32::new(n).ok_or_else(|| {
-                        WalletError::invalid("min_confirmations must be at least 1")
-                    })?,
-                    true,
-                ),
-            };
+            let policy = confirmations_policy(min_confirmations)?;
             let Some(summary) = self.db().get_wallet_summary(policy)? else {
                 return Ok(None);
             };
@@ -678,7 +789,8 @@ impl Wallet {
                     |(uuid, balance): (&AccountUuid, &data_api::AccountBalance)| AccountBalance {
                         account_uuid: uuid.expose_uuid().to_string(),
                         ironwood: balance.ironwood_balance().into(),
-                        transparent: (&balance.unshielded_balance()).into(),
+                        transparent: balance.unshielded_regular_balance().into(),
+                        coinbase: balance.unshielded_coinbase_balance().into(),
                         total: balance.total().into_u64(),
                     },
                 )
@@ -713,12 +825,39 @@ impl Wallet {
     /// Records an unspent transparent output that a server reported for one
     /// of the wallet's transparent addresses. Storing an output again
     /// replaces it.
+    ///
+    /// The wallet tells a coinbase output from a regular one only by its
+    /// transaction, and the caller is responsible for holding it first:
+    /// stored with
+    /// [`decrypt_and_store_transaction`](Wallet::decrypt_and_store_transaction),
+    /// given the ID it was fetched by, and confirmed held with
+    /// [`missing_transactions`](Wallet::missing_transactions). An output
+    /// whose transaction is not held is still recorded, unchecked, and
+    /// counts as a regular output that a payment can select. This call does
+    /// not refuse it because recording outputs alone is how tests and
+    /// fixtures build wallets with many inputs; the sync loop never records
+    /// an output before its transaction is held. The precondition holds
+    /// because the only caller is the package's private Go backend. Should
+    /// this crate become an interface of its own, the unchecked path belongs
+    /// in a helper for fixtures, and this call should refuse an output whose
+    /// transaction is not held.
+    ///
+    /// When the wallet holds the output's transaction, the output is checked
+    /// against it and classified before anything is written. An output that
+    /// the transaction does not have, with that index, script and value,
+    /// fails with [`WalletError::InvalidArgument`]. A held transaction that
+    /// cannot be parsed fails with [`WalletError::Database`]. Either way the
+    /// output is not recorded. A coinbase transaction whose mark a rewind
+    /// cleared is marked again first, so a recorded coinbase output is never
+    /// taken for a regular one, whatever the order of the calls and any
+    /// rewind between them.
     pub fn put_utxo(&self, utxo: Utxo) -> Result<(), WalletError> {
         guard(|| {
             let txid = <[u8; 32]>::try_from(&utxo.txid[..])
                 .map_err(|_| WalletError::invalid("a transaction ID is 32 bytes"))?;
             let value = Zatoshis::from_u64(utxo.value_zat)
                 .map_err(|_| WalletError::invalid("the output value is out of range"))?;
+            let script_bytes = utxo.script.clone();
             let output = WalletTransparentOutput::<AccountUuid>::from_parts(
                 OutPoint::new(txid, utxo.index),
                 TxOut::new(value, Script(script::Code(utxo.script))),
@@ -729,7 +868,38 @@ impl Wallet {
                 None,
             )
             .ok_or_else(|| WalletError::invalid("the script does not pay a transparent address"))?;
-            self.db().put_received_transparent_utxo(&output)?;
+            let mut db = self.db();
+            let held: Option<(Vec<u8>, Option<u32>, Option<i64>)> = self
+                .reader()
+                .query_row(
+                    "SELECT raw, mined_height, tx_index FROM transactions
+                     WHERE txid = ?1 AND raw IS NOT NULL",
+                    [&txid[..]],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                )
+                .optional()
+                .map_err(WalletError::database)?;
+            if let Some((raw, mined_height, tx_index)) = held {
+                let mined_height = mined_height.map(BlockHeight::from_u32);
+                let tx = parse_held(&self.params, &db, &raw, mined_height)?;
+                let paid = tx
+                    .transparent_bundle()
+                    .and_then(|b| b.vout.get(utxo.index as usize));
+                if !paid
+                    .is_some_and(|o| o.value() == value && o.script_pubkey().0.0 == script_bytes)
+                {
+                    return Err(WalletError::invalid(format!(
+                        "transaction {} has no output {} of {} zatoshis to that script",
+                        tx.txid(),
+                        utxo.index,
+                        utxo.value_zat
+                    )));
+                }
+                if tx_index.is_none() && tx.transparent_bundle().is_some_and(|b| b.is_coinbase()) {
+                    decrypt_and_store_transaction(&self.params, &mut *db, &tx, mined_height)?;
+                }
+            }
+            db.put_received_transparent_utxo(&output)?;
             Ok(())
         })
     }
@@ -868,6 +1038,10 @@ impl Wallet {
     ///
     /// `mined_height` is the height of the block holding the transaction, or
     /// unset for a transaction that is not mined.
+    ///
+    /// A transaction that does not involve the wallet is not stored, and the
+    /// call still succeeds. A caller that needs the transaction held checks
+    /// with [`missing_transactions`](Wallet::missing_transactions).
     pub fn decrypt_and_store_transaction(
         &self,
         tx: Vec<u8>,
@@ -905,6 +1079,11 @@ impl Wallet {
         })
     }
 }
+
+mod history;
+mod pending;
+mod send;
+mod send_max;
 
 #[cfg(test)]
 mod tests;

@@ -72,14 +72,24 @@ type backend interface {
 	// utxoQueryHeight is the height from which to ask a server for the
 	// account's unspent transparent outputs.
 	utxoQueryHeight(accountID string) (uint32, error)
+	// putUTXO records an unspent output. When the wallet holds the output's
+	// transaction, an output the transaction does not have, by index,
+	// script and value, fails with ErrInvalidArgument, and a held
+	// transaction that cannot be read fails with ErrDatabase. Neither is
+	// recorded.
 	putUTXO(u *utxo) error
+	// missingTransactions returns the IDs among txids of the transactions
+	// the wallet does not hold the full data of.
+	missingTransactions(txids [][]byte) ([][]byte, error)
 
 	transactionDataRequests() ([]txRequest, error)
 	setTransactionStatus(txid []byte, status txStatus) error
 	// decryptAndStoreTransaction stores the details of a full transaction
 	// and returns its ID. A set txid is the ID that the transaction must
 	// have: one with another ID is not stored, and the error is then
-	// ErrInvalidArgument. minedHeight is nil for an unmined transaction.
+	// ErrInvalidArgument. minedHeight is nil for an unmined transaction. A
+	// transaction that does not involve the wallet is not stored, and the
+	// call succeeds.
 	decryptAndStoreTransaction(tx, txid []byte, minedHeight *uint32) ([]byte, error)
 	// notifyAddressChecked closes a txRequestAddress request. asOfHeight is
 	// the last height the query covered.
@@ -88,6 +98,36 @@ type backend interface {
 	// at a randomized time that is offset from now on average. It returns
 	// false for an address the wallet does not schedule checks for.
 	scheduleNextCheck(address string, offset time.Duration) (time.Time, bool, error)
+
+	// estimateTransfer returns the fee of a payment, proposed as send would
+	// propose it. Nothing is stored. minConfirmations is as for summary.
+	estimateTransfer(accountID, address string, amount uint64, memo []byte, minConfirmations uint32) (*TransferEstimate, error)
+	// send creates and stores the transactions that pay amount to address
+	// from the account, and returns them for broadcast. seed is the
+	// account's ZIP 32 seed. Once it returns without error the transactions
+	// exist, whether or not their raw bytes could be read back.
+	send(accountID string, seed []byte, address string, amount uint64, memo []byte, maxFee uint64, minConfirmations uint32) (*sendResult, error)
+	// estimateSendMax returns what sendMax would send.
+	estimateSendMax(accountID, address string, memo []byte, minConfirmations uint32) (*SendMaxEstimate, error)
+	// sendMax creates and stores the transaction that sends everything one
+	// transaction can take from the account to address. A non-zero
+	// expectedAmount must equal the amount, or nothing is created.
+	sendMax(accountID string, seed []byte, address string, memo []byte, maxFee, expectedAmount uint64, minConfirmations uint32) (*sendMaxResult, error)
+	// spendable returns the value of the inputs a send can select.
+	spendable(accountID string, minConfirmations uint32) (SpendableValue, error)
+	// rebroadcastInventory lists the transactions the wallet created that
+	// are neither mined nor expired as of the last chain tip, oldest first.
+	rebroadcastInventory() ([]unminedTx, error)
+	// transactions lists the account's history after afterSeq, at most
+	// limit records, and transaction reads one record by its ID in wire
+	// byte order, with the chain tip it was read against. openTransactions
+	// lists the records that can still change.
+	transactions(accountID string, afterSeq uint64, limit uint32) (*TxListing, error)
+	transaction(accountID string, txid []byte) (*TxRecord, uint32, error)
+	openTransactions(accountID string, depth uint32) (*TxListing, error)
+	// ownsAddress returns the account an address belongs to, and false if it
+	// belongs to none.
+	ownsAddress(address string) (accountID string, ok bool, err error)
 
 	// close releases the database. Calls made after it return ErrClosed.
 	close() error

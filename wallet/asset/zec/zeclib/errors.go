@@ -42,6 +42,54 @@ var (
 	// ErrInternal reports a bug in the Rust backend that was caught at the
 	// FFI boundary.
 	ErrInternal = errors.New("zeclib: internal error")
+	// ErrSend is returned when a payment cannot be proposed or created for
+	// a reason that has no error of its own.
+	ErrSend = errors.New("zeclib: the payment cannot be made")
+	// ErrInsufficientFunds is returned when the account's spendable funds
+	// do not cover a payment and its fee. The error is an
+	// *InsufficientFundsError, which carries the amounts.
+	ErrInsufficientFunds = errors.New("zeclib: insufficient funds")
+	// ErrNotSynced is returned by a send or an estimate when the wallet has
+	// not scanned far enough to build a transaction. Syncing resolves it.
+	ErrNotSynced = errors.New("zeclib: the wallet is not synced far enough to send")
+	// ErrFeeTooHigh is returned when the fee of a payment exceeds the limit
+	// the caller set. Nothing is created. The error is a *FeeTooHighError.
+	ErrFeeTooHigh = errors.New("zeclib: the fee exceeds the limit")
+	// ErrAmountChanged is returned by SendMax when the amount it would pay
+	// differs from the expected amount. Nothing is created. The error is an
+	// *AmountChangedError.
+	ErrAmountChanged = errors.New("zeclib: the amount changed")
+	// ErrTooLarge is returned when a payment would make a transaction larger
+	// than a block can hold, typically for spending too many inputs.
+	// Nothing is created. A smaller payment can succeed.
+	ErrTooLarge = errors.New("zeclib: the transaction would be too large")
+	// ErrUnsupportedRecipient is returned for a recipient the wallet cannot
+	// pay: an address of another network, a Sapling address, a TEX address,
+	// or a unified address without an Orchard or a transparent receiver.
+	ErrUnsupportedRecipient = errors.New("zeclib: unsupported recipient")
+	// ErrAddressExpired is returned for a payment to a unified address that
+	// has expired, or that expires before the transaction would (ZIP 316).
+	ErrAddressExpired = errors.New("zeclib: the address has expired")
+	// ErrAmountBelowMinimum is returned for a payment to a transparent
+	// receiver below the smallest output nodes relay. The error is an
+	// *AmountBelowMinimumError, which carries the minimum.
+	ErrAmountBelowMinimum = errors.New("zeclib: the amount is below the smallest transparent output")
+	// ErrServerUnreachable is matched by a failure to reach the server or
+	// of the connection to it.
+	ErrServerUnreachable = errors.New("zeclib: the server could not be reached")
+	// ErrServerFailure is matched by a failure of a server call other than
+	// the connection, such as an internal error of the server.
+	ErrServerFailure = errors.New("zeclib: the server failed")
+	// ErrMemoNotAllowed is returned when a memo is given for a payment to a
+	// transparent receiver.
+	ErrMemoNotAllowed = errors.New("zeclib: a memo cannot be sent to a transparent recipient")
+	// ErrSeedMismatch is returned when the seed given to spend from an
+	// account is not the seed the account was derived from.
+	ErrSeedMismatch = errors.New("zeclib: the seed does not belong to the account")
+	// ErrBroadcastRejected means the server's node refused a transaction,
+	// as opposed to a server that could not be reached. The error is a
+	// *BroadcastRejectedError.
+	ErrBroadcastRejected = errors.New("zeclib: the transaction was rejected")
 	// ErrWrongNetwork means the server, or a tree state passed to
 	// CreateAccountWithTreeState, is for a different chain than the wallet.
 	// During sync it is reported in SyncStatus.
@@ -61,7 +109,96 @@ var (
 	// reorganized below the lowest height the wallet can rewind to. The
 	// wallet database has to be rebuilt from the seed.
 	ErrReorgTooDeep = errors.New("zeclib: chain reorganization is deeper than the wallet can rewind")
+	// ErrOutputUnrecorded is reported in SyncStatus, with SyncSynced, when
+	// an unspent transparent output the server lists could not be
+	// recorded: its funding transaction could not be fetched or stored, or
+	// the server's output does not match the transaction. The output is in
+	// no balance until it is recorded. The wallet asks again in every
+	// cycle, except while the requests for the transparent addresses are
+	// put off after a failure (see SyncStatus.TransparentErr).
+	ErrOutputUnrecorded = errors.New("zeclib: an unspent transparent output could not be recorded")
 )
+
+// InsufficientFundsError reports a payment that the account's spendable
+// funds do not cover. It matches ErrInsufficientFunds. It is also the error
+// for a payment that needs more transparent inputs than the 1,333 one
+// transaction takes, with Available the value of the capped selection.
+type InsufficientFundsError struct {
+	// Available is the value the account can spend, and Required the value
+	// the payment needs including its fee, both in zatoshis.
+	Available, Required uint64
+}
+
+func (e *InsufficientFundsError) Error() string {
+	return fmt.Sprintf("zeclib: insufficient funds: %d zatoshis available, %d required", e.Available, e.Required)
+}
+
+// Is makes the error match ErrInsufficientFunds.
+func (e *InsufficientFundsError) Is(target error) bool { return target == ErrInsufficientFunds }
+
+// AmountBelowMinimumError reports a payment to a transparent receiver below
+// the smallest output nodes relay. It matches ErrAmountBelowMinimum.
+type AmountBelowMinimumError struct {
+	// Minimum is the smallest amount the receiver can be paid, in zatoshis:
+	// 54 for the standard scripts.
+	Minimum uint64
+}
+
+func (e *AmountBelowMinimumError) Error() string {
+	return fmt.Sprintf("zeclib: the amount is below the smallest transparent output of %d zatoshis", e.Minimum)
+}
+
+// Is makes the error match ErrAmountBelowMinimum.
+func (e *AmountBelowMinimumError) Is(target error) bool { return target == ErrAmountBelowMinimum }
+
+// AmountChangedError reports a send max whose amount differs from the one
+// the caller expected, because the spendable inputs changed. It matches
+// ErrAmountChanged.
+type AmountChangedError struct {
+	// Expected is the amount the caller expected and Actual the amount the
+	// send would have paid, in zatoshis.
+	Expected, Actual uint64
+}
+
+func (e *AmountChangedError) Error() string {
+	return fmt.Sprintf("zeclib: the amount changed from %d to %d zatoshis", e.Expected, e.Actual)
+}
+
+// Is makes the error match ErrAmountChanged.
+func (e *AmountChangedError) Is(target error) bool { return target == ErrAmountChanged }
+
+// FeeTooHighError reports a payment whose fee exceeds the caller's limit. It
+// matches ErrFeeTooHigh.
+type FeeTooHighError struct {
+	// Fee is the fee of the payment and MaxFee the limit, in zatoshis.
+	Fee, MaxFee uint64
+}
+
+func (e *FeeTooHighError) Error() string {
+	return fmt.Sprintf("zeclib: the fee of %d zatoshis exceeds the limit of %d", e.Fee, e.MaxFee)
+}
+
+// Is makes the error match ErrFeeTooHigh.
+func (e *FeeTooHighError) Is(target error) bool { return target == ErrFeeTooHigh }
+
+// BroadcastRejectedError reports a transaction that the server's node
+// refused. It matches ErrBroadcastRejected.
+type BroadcastRejectedError struct {
+	// Code is the error code the server reported, zero if it reported none.
+	Code int32
+	// Message is the reason the server gave.
+	Message string
+}
+
+func (e *BroadcastRejectedError) Error() string {
+	if e.Code != 0 {
+		return fmt.Sprintf("zeclib: the transaction was rejected: error %d: %s", e.Code, e.Message)
+	}
+	return "zeclib: the transaction was rejected: " + e.Message
+}
+
+// Is makes the error match ErrBroadcastRejected.
+func (e *BroadcastRejectedError) Is(target error) bool { return target == ErrBroadcastRejected }
 
 // chainContinuityError reports that scanned blocks do not connect to the
 // chain the wallet has already scanned, which is how a chain reorganization

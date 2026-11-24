@@ -10,6 +10,7 @@ use std::sync::Arc;
 use tempfile::TempDir;
 use zcash_primitives::transaction::{Authorized, TransactionData, TxVersion};
 
+use super::send::SpendableValue;
 use super::*;
 use crate::{
     testutil::{all_at, block_hash, encoded_blocks, regtest, tree_state},
@@ -1416,4 +1417,311 @@ fn next_check_scheduling() {
         w.schedule_next_check("nope".into(), 600).unwrap_err(),
         "not a transparent address",
     );
+}
+
+/// A wallet with one account, scanned to `tip` on fork 0. It holds nothing.
+fn synced_wallet(tip: u32) -> (Fixture, Account) {
+    let (fx, account) = wallet_with_account();
+    fx.wallet.update_chain_tip(tip).unwrap();
+    scan(&fx.wallet, BIRTHDAY..tip + 1, 0).unwrap();
+    (fx, account)
+}
+
+fn own_addresses(w: &Wallet, account: &Account) -> (String, String) {
+    let unified = w.current_address(account.uuid.clone()).unwrap();
+    let transparent = crate::address::transparent_receiver(regtest(), unified.clone())
+        .unwrap()
+        .unwrap();
+    (unified, transparent)
+}
+
+#[test]
+fn sending_from_an_unfunded_account_fails() {
+    let (fx, account) = synced_wallet(BIRTHDAY + 20);
+    let w = &fx.wallet;
+    let (unified, transparent) = own_addresses(w, &account);
+
+    for address in [&unified, &transparent] {
+        let err = w
+            .estimate_transfer(account.uuid.clone(), address.clone(), 100_000, None, None)
+            .unwrap_err();
+        assert!(
+            matches!(err, WalletError::InsufficientFunds { available: 0, required } if required > 100_000),
+            "estimate to {address}: {err:?}"
+        );
+        let err = w
+            .send(
+                account.uuid.clone(),
+                SEED.to_vec(),
+                address.clone(),
+                100_000,
+                None,
+                1_000_000,
+                None,
+            )
+            .unwrap_err();
+        assert!(
+            matches!(err, WalletError::InsufficientFunds { available: 0, .. }),
+            "send to {address}: {err:?}"
+        );
+    }
+    assert_eq!(
+        w.spendable(account.uuid.clone(), None).unwrap(),
+        SpendableValue::default()
+    );
+    assert!(w.rebroadcast_inventory().unwrap().is_empty());
+}
+
+#[test]
+fn sending_needs_a_chain_tip() {
+    let (fx, account) = wallet_with_account();
+    let w = &fx.wallet;
+    let (unified, _) = own_addresses(w, &account);
+    let err = w
+        .estimate_transfer(account.uuid.clone(), unified.clone(), 100_000, None, None)
+        .unwrap_err();
+    assert!(matches!(err, WalletError::NotSynced { .. }), "{err:?}");
+    let err = w
+        .send(
+            account.uuid.clone(),
+            SEED.to_vec(),
+            unified,
+            100_000,
+            None,
+            1_000_000,
+            None,
+        )
+        .unwrap_err();
+    assert!(matches!(err, WalletError::NotSynced { .. }), "{err:?}");
+    // Nothing is spendable before the wallet knows the chain.
+    assert_eq!(
+        w.spendable(account.uuid.clone(), None).unwrap(),
+        SpendableValue::default()
+    );
+    assert!(w.rebroadcast_inventory().unwrap().is_empty());
+}
+
+#[test]
+fn send_arguments_are_checked() {
+    let (fx, account) = synced_wallet(BIRTHDAY + 20);
+    let w = &fx.wallet;
+    let (unified, transparent) = own_addresses(w, &account);
+    let send = |uuid: &str, seed: Vec<u8>, address: &str, amount: u64, memo: Option<Vec<u8>>| {
+        w.send(
+            uuid.into(),
+            seed,
+            address.into(),
+            amount,
+            memo,
+            1_000_000,
+            None,
+        )
+        .unwrap_err()
+    };
+    let uuid = account.uuid.as_str();
+
+    // The seed is checked against the account after the recipient, memo and
+    // amount and before the funds are looked at.
+    assert!(matches!(
+        send(uuid, OTHER_SEED.to_vec(), &unified, 100_000, None),
+        WalletError::SeedMismatch
+    ));
+    assert_invalid(send(uuid, vec![1; 31], &unified, 100_000, None), "seed");
+    assert_invalid(
+        send("not a uuid", SEED.to_vec(), &unified, 100_000, None),
+        "UUID",
+    );
+    assert!(matches!(
+        send(
+            &uuid::Uuid::new_v4().to_string(),
+            SEED.to_vec(),
+            &unified,
+            100_000,
+            None
+        ),
+        WalletError::AccountNotFound
+    ));
+    assert_invalid(send(uuid, SEED.to_vec(), &unified, 0, None), "zero");
+
+    // Memos.
+    assert!(matches!(
+        send(
+            uuid,
+            SEED.to_vec(),
+            &transparent,
+            100_000,
+            Some(b"hi".to_vec())
+        ),
+        WalletError::MemoNotAllowed
+    ));
+    assert_invalid(
+        send(uuid, SEED.to_vec(), &unified, 100_000, Some(vec![0; 513])),
+        "memo",
+    );
+    // A memo for a shielded recipient passes the checks and fails on funds.
+    assert!(matches!(
+        send(uuid, SEED.to_vec(), &unified, 100_000, Some(b"hi".to_vec())),
+        WalletError::InsufficientFunds { .. }
+    ));
+
+    // Recipients that cannot be paid.
+    assert!(matches!(
+        send(
+            uuid,
+            SEED.to_vec(),
+            "zregtestsapling1uwt3xqagtnemsucergl4f5lcjj0qsh4hu2avqs6gp3fq62yke38dcyxg5ddewwx5pnjrkfmrr6w",
+            100_000,
+            None
+        ),
+        WalletError::UnsupportedRecipient { .. }
+    ));
+    assert!(matches!(
+        send(
+            uuid,
+            SEED.to_vec(),
+            "tmQbvCAJZfBjBztopcwVDbujsC33vFH1whmX",
+            100_000,
+            None
+        ),
+        WalletError::UnsupportedRecipient { .. }
+    ));
+
+    // The estimate checks the same arguments, less the seed.
+    assert!(matches!(
+        w.estimate_transfer(uuid.into(), transparent, 1, Some(vec![]), None),
+        Err(WalletError::MemoNotAllowed)
+    ));
+    assert_invalid(
+        w.estimate_transfer(uuid.into(), unified.clone(), 1, None, Some(0))
+            .unwrap_err(),
+        "min_confirmations",
+    );
+    assert!(matches!(
+        w.spendable(uuid::Uuid::new_v4().to_string(), None),
+        Err(WalletError::AccountNotFound)
+    ));
+}
+
+#[test]
+fn the_seed_check_follows_the_account_index() {
+    let (fx, first) = wallet_with_account();
+    let w = &fx.wallet;
+    let second = w
+        .create_account(
+            "second".into(),
+            SEED.to_vec(),
+            tree_state(PRIOR, 0),
+            None,
+            None,
+        )
+        .unwrap();
+    assert_eq!(second.hd_account_index, Some(1));
+    let tip = BIRTHDAY + 20;
+    w.update_chain_tip(tip).unwrap();
+    scan(w, BIRTHDAY..tip + 1, 0).unwrap();
+    let (unified, _) = own_addresses(w, &first);
+    // The seed of both accounts passes the check for the second one, whose
+    // keys come from index 1, and the send fails on funds.
+    let err = w
+        .send(
+            second.uuid.clone(),
+            SEED.to_vec(),
+            unified.clone(),
+            100_000,
+            None,
+            1_000_000,
+            None,
+        )
+        .unwrap_err();
+    assert!(
+        matches!(err, WalletError::InsufficientFunds { .. }),
+        "{err:?}"
+    );
+    let err = w
+        .send(
+            second.uuid,
+            OTHER_SEED.to_vec(),
+            unified,
+            100_000,
+            None,
+            1_000_000,
+            None,
+        )
+        .unwrap_err();
+    assert!(matches!(err, WalletError::SeedMismatch), "{err:?}");
+}
+
+/// The rebroadcast inventory against rows written straight into the
+/// transactions table. The query depends on the private schema of
+/// zcash_client_sqlite, which this pins.
+#[test]
+fn rebroadcast_inventory_boundaries() {
+    let (fx, _account) = wallet_with_account();
+    let w = &fx.wallet;
+    let tip = BIRTHDAY + 20;
+    w.update_chain_tip(tip).unwrap();
+
+    let conn = rusqlite::Connection::open(fx.db_path()).unwrap();
+    // id byte, created, mined height, expiry height, raw
+    type Row<'a> = (
+        u8,
+        Option<&'a str>,
+        Option<u32>,
+        Option<u32>,
+        Option<&'a [u8]>,
+    );
+    let rows: [Row; 8] = [
+        (1, Some("2026-01-01"), None, Some(tip + 1), Some(b"a")),
+        (2, Some("2026-01-01"), None, Some(tip), Some(b"b")),
+        (3, Some("2026-01-01"), None, Some(0), Some(b"c")),
+        (
+            4,
+            Some("2026-01-01"),
+            Some(tip - 1),
+            Some(tip + 5),
+            Some(b"d"),
+        ),
+        (5, None, None, Some(tip + 5), Some(b"e")),
+        (6, Some("2026-01-01"), None, Some(tip + 5), None),
+        (7, Some("2026-01-01"), None, None, Some(b"g")),
+        (8, Some("2026-01-01"), None, Some(tip + 2), Some(b"h")),
+    ];
+    for (id, created, mined, expiry, raw) in rows {
+        conn.execute(
+            "INSERT INTO transactions (txid, created, mined_height, expiry_height, raw, \
+             min_observed_height) VALUES (?1, ?2, ?3, ?4, ?5, 1)",
+            rusqlite::params![vec![id; 32], created, mined, expiry, raw],
+        )
+        .unwrap();
+    }
+
+    let listed: Vec<(u8, Vec<u8>, u32)> = w
+        .rebroadcast_inventory()
+        .unwrap()
+        .into_iter()
+        .map(|tx| (tx.txid[0], tx.raw, tx.expiry_height))
+        .collect();
+    assert_eq!(
+        listed,
+        vec![
+            // Mineable in the next block, tip + 1.
+            (1, b"a".to_vec(), tip + 1),
+            // No expiry.
+            (3, b"c".to_vec(), 0),
+            (7, b"g".to_vec(), 0),
+            (8, b"h".to_vec(), tip + 2),
+        ],
+        "left out: expiry at the tip (2), mined (4), not created by the wallet (5), no raw \
+         bytes (6)"
+    );
+
+    // One block on, the transaction expiring at tip + 1 is gone.
+    w.update_chain_tip(tip + 1).unwrap();
+    let ids: Vec<u8> = w
+        .rebroadcast_inventory()
+        .unwrap()
+        .iter()
+        .map(|tx| tx.txid[0])
+        .collect();
+    assert_eq!(ids, vec![3, 7, 8]);
 }

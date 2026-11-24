@@ -62,6 +62,25 @@ type fakeBackend struct {
 	stored    []storedTx
 	notified  []notifiedCheck
 	scheduled map[string]time.Duration
+	// created holds the transactions send created. sendFee is the fee of
+	// every send and estimate, expiryDelta the number of blocks above the
+	// chain tip at which a created transaction expires (zero: never), and
+	// unreadable makes send report its transaction without its raw bytes.
+	created     []fakeCreated
+	sendFee     uint64
+	expiryDelta uint32
+	unreadable  bool
+	// spendableValue is what spendable reports. A send max sends it less
+	// leftBehind and the fee, and reports leftBehind as left. txsPerSend is
+	// the number of transactions a send creates, one if zero.
+	spendableValue SpendableValue
+	leftBehind     LeftBehind
+	txsPerSend     int
+
+	// onScan, if set, is called with the backend locked at the start of
+	// each scanBlocks call.
+	onScan func(b *fakeBackend)
+
 	// stuck makes scanBlocks accept a batch without recording it.
 	stuck bool
 	// batches records the first and last height of each scanned batch.
@@ -144,6 +163,181 @@ func (b *fakeBackend) maxScannedLocked() (uint32, bool) {
 		highest = max(highest, h)
 	}
 	return highest, len(b.scanned) > 0
+}
+
+// fakeCreated is a transaction the fake backend created.
+type fakeCreated struct {
+	txid   []byte
+	raw    []byte
+	expiry uint32
+	// minedAt is the height the transaction is mined at, zero while it is
+	// unmined.
+	minedAt uint32
+}
+
+// fakeTxPrefix starts every raw transaction the fake backend creates. The
+// fake server takes the transaction ID from the bytes that follow it.
+const fakeTxPrefix = "faketx:"
+
+// fakeTxID returns the ID of a raw transaction made by the fake backend.
+func fakeTxID(raw []byte) ([]byte, bool) {
+	if !bytes.HasPrefix(raw, []byte(fakeTxPrefix)) {
+		return nil, false
+	}
+	return raw[len(fakeTxPrefix):], true
+}
+
+func (b *fakeBackend) estimateTransfer(accountID, address string, _ uint64, _ []byte, _ uint32) (*TransferEstimate, error) {
+	b.mtx.Lock()
+	defer b.mtx.Unlock()
+	if err := b.enter("estimateTransfer"); err != nil {
+		return nil, err
+	}
+	if !b.hasAccountLocked(accountID) {
+		return nil, ErrAccountNotFound
+	}
+	return &TransferEstimate{Fee: b.sendFee, PaidAddress: address, PaidPool: PaidTransparent}, nil
+}
+
+// send creates a transaction that expires expiryDelta blocks above the
+// chain tip, or never if expiryDelta is zero.
+func (b *fakeBackend) send(accountID string, _ []byte, address string, _ uint64, _ []byte, maxFee uint64, _ uint32) (*sendResult, error) {
+	b.mtx.Lock()
+	defer b.mtx.Unlock()
+	if err := b.enter("send"); err != nil {
+		return nil, err
+	}
+	if !b.hasAccountLocked(accountID) {
+		return nil, ErrAccountNotFound
+	}
+	if b.sendFee > maxFee {
+		return nil, &FeeTooHighError{Fee: b.sendFee, MaxFee: maxFee}
+	}
+	return b.createLocked(address), nil
+}
+
+// createLocked creates the transactions of one send: txsPerSend of them, or
+// one. The caller holds mtx.
+func (b *fakeBackend) createLocked(address string) *sendResult {
+	res := &sendResult{fee: b.sendFee, paidAddress: address, paidPool: PaidTransparent}
+	for range max(b.txsPerSend, 1) {
+		sum := sha256.Sum256(fmt.Appendf(nil, "fake transaction %d", len(b.created)))
+		tx := fakeCreated{txid: sum[:], raw: append([]byte(fakeTxPrefix), sum[:]...)}
+		if b.expiryDelta > 0 {
+			tx.expiry = b.tip + b.expiryDelta
+		}
+		b.created = append(b.created, tx)
+		created := createdTx{txid: tx.txid, raw: tx.raw}
+		if b.unreadable {
+			created.raw = nil
+			res.readErr = "the transaction cannot be read back"
+		}
+		res.transactions = append(res.transactions, created)
+	}
+	return res
+}
+
+// sendMaxAmountLocked is what a send max would pay, as the real backend
+// computes it: the spendable value, less what one transaction cannot take,
+// less the fee, at least one zatoshi. The caller holds mtx.
+func (b *fakeBackend) sendMaxAmountLocked() (uint64, error) {
+	total := b.spendableValue.Ironwood + b.spendableValue.Transparent
+	left := b.leftBehind.TransparentValue + b.leftBehind.NoteValue
+	if left > total {
+		panic("the fake leaves behind more than it holds")
+	}
+	taken := total - left
+	if taken < b.sendFee+1 {
+		return 0, &InsufficientFundsError{Available: taken, Required: b.sendFee + 1}
+	}
+	return taken - b.sendFee, nil
+}
+
+func (b *fakeBackend) estimateSendMax(accountID, address string, _ []byte, _ uint32) (*SendMaxEstimate, error) {
+	b.mtx.Lock()
+	defer b.mtx.Unlock()
+	if err := b.enter("estimateSendMax"); err != nil {
+		return nil, err
+	}
+	if !b.hasAccountLocked(accountID) {
+		return nil, ErrAccountNotFound
+	}
+	amount, err := b.sendMaxAmountLocked()
+	if err != nil {
+		return nil, err
+	}
+	return &SendMaxEstimate{
+		Amount:      amount,
+		Fee:         b.sendFee,
+		PaidAddress: address,
+		PaidPool:    PaidTransparent,
+		LeftBehind:  b.leftBehind,
+	}, nil
+}
+
+func (b *fakeBackend) sendMax(accountID string, _ []byte, address string, _ []byte, maxFee, expectedAmount uint64, _ uint32) (*sendMaxResult, error) {
+	b.mtx.Lock()
+	defer b.mtx.Unlock()
+	if err := b.enter("sendMax"); err != nil {
+		return nil, err
+	}
+	if !b.hasAccountLocked(accountID) {
+		return nil, ErrAccountNotFound
+	}
+	amount, err := b.sendMaxAmountLocked()
+	if err != nil {
+		return nil, err
+	}
+	if b.sendFee > maxFee {
+		return nil, &FeeTooHighError{Fee: b.sendFee, MaxFee: maxFee}
+	}
+	if expectedAmount != 0 && expectedAmount != amount {
+		return nil, &AmountChangedError{Expected: expectedAmount, Actual: amount}
+	}
+	return &sendMaxResult{
+		sendResult: *b.createLocked(address),
+		amount:     amount,
+		leftBehind: b.leftBehind,
+	}, nil
+}
+
+func (b *fakeBackend) spendable(accountID string, _ uint32) (SpendableValue, error) {
+	b.mtx.Lock()
+	defer b.mtx.Unlock()
+	if err := b.enter("spendable"); err != nil {
+		return SpendableValue{}, err
+	}
+	if !b.hasAccountLocked(accountID) {
+		return SpendableValue{}, ErrAccountNotFound
+	}
+	return b.spendableValue, nil
+}
+
+func (b *fakeBackend) rebroadcastInventory() ([]unminedTx, error) {
+	b.mtx.Lock()
+	defer b.mtx.Unlock()
+	if err := b.enter("rebroadcastInventory"); err != nil {
+		return nil, err
+	}
+	var txs []unminedTx
+	for _, tx := range b.created {
+		if tx.minedAt != 0 || (b.hasTip && tx.expiry != 0 && tx.expiry <= b.tip) {
+			continue
+		}
+		txs = append(txs, unminedTx{txid: tx.txid, raw: tx.raw, expiryHeight: tx.expiry})
+	}
+	return txs, nil
+}
+
+// createdTxs returns the transactions the backend created.
+func (b *fakeBackend) createdTxs() []fakeCreated {
+	b.mtx.Lock()
+	defer b.mtx.Unlock()
+	return slices.Clone(b.created)
+}
+
+func (b *fakeBackend) ownsAddress(string) (string, bool, error) {
+	return "", false, wrapf(ErrInternal, "the fake backend does not resolve addresses")
 }
 
 func (b *fakeBackend) close() error {
@@ -435,6 +629,9 @@ func (b *fakeBackend) scanBlocks(fromState []byte, blocks [][]byte) (*scanSummar
 	if err := b.enter("scanBlocks"); err != nil {
 		return nil, err
 	}
+	if b.onScan != nil {
+		b.onScan(b)
+	}
 	var state walletrpc.TreeState
 	if err := proto.Unmarshal(fromState, &state); err != nil {
 		return nil, wrapf(ErrInvalidArgument, "tree state: %v", err)
@@ -492,11 +689,17 @@ func (b *fakeBackend) rewindToHeight(height uint32) (uint32, error) {
 		return 0, err
 	}
 	highest, ok := b.maxScannedLocked()
+	if ok && height < highest && height < b.minRewind {
+		return 0, &rewindError{requested: height, safe: b.minRewind, hasSafe: !b.noSafeRewind}
+	}
+	// A transaction mined above the rewind height is unmined again.
+	for i := range b.created {
+		if b.created[i].minedAt > height {
+			b.created[i].minedAt = 0
+		}
+	}
 	if !ok || height >= highest {
 		return highest, nil
-	}
-	if height < b.minRewind {
-		return 0, &rewindError{requested: height, safe: b.minRewind, hasSafe: !b.noSafeRewind}
 	}
 	for h := range b.scanned {
 		if h > height {
@@ -540,11 +743,76 @@ func (b *fakeBackend) utxoQueryHeight(accountID string) (uint32, error) {
 	return birthday, nil
 }
 
+func (b *fakeBackend) missingTransactions(txids [][]byte) ([][]byte, error) {
+	b.mtx.Lock()
+	defer b.mtx.Unlock()
+	if err := b.enter("missingTransactions"); err != nil {
+		return nil, err
+	}
+	held := make(map[string]struct{})
+	for _, tx := range b.stored {
+		id := sha256.Sum256(tx.data)
+		held[string(id[:])] = struct{}{}
+	}
+	for _, tx := range b.created {
+		held[string(tx.txid)] = struct{}{}
+	}
+	var missing [][]byte
+	for _, txid := range txids {
+		if _, ok := held[string(txid)]; !ok {
+			missing = append(missing, txid)
+		}
+	}
+	return missing, nil
+}
+
+// The fake backend keeps no history: its listings are empty.
+func (b *fakeBackend) transactions(accountID string, _ uint64, _ uint32) (*TxListing, error) {
+	return b.emptyListing("transactions", accountID)
+}
+
+func (b *fakeBackend) transaction(accountID string, _ []byte) (*TxRecord, uint32, error) {
+	l, err := b.emptyListing("transaction", accountID)
+	if err != nil {
+		return nil, 0, err
+	}
+	return nil, l.ChainTip, nil
+}
+
+func (b *fakeBackend) openTransactions(accountID string, _ uint32) (*TxListing, error) {
+	return b.emptyListing("openTransactions", accountID)
+}
+
+func (b *fakeBackend) emptyListing(method, accountID string) (*TxListing, error) {
+	b.mtx.Lock()
+	defer b.mtx.Unlock()
+	if err := b.enter(method); err != nil {
+		return nil, err
+	}
+	if !b.hasAccountLocked(accountID) {
+		return nil, ErrAccountNotFound
+	}
+	return &TxListing{ChainTip: b.tip}, nil
+}
+
 func (b *fakeBackend) putUTXO(u *utxo) error {
 	b.mtx.Lock()
 	defer b.mtx.Unlock()
 	if err := b.enter("putUTXO"); err != nil {
 		return err
+	}
+	// As the Rust backend, an output is checked against its transaction
+	// when the transaction is held.
+	for _, tx := range b.stored {
+		if id := sha256.Sum256(tx.data); !bytes.Equal(id[:], u.txid) {
+			continue
+		}
+		if _, pays, ok := parseTestTx(tx.data); ok {
+			if int(u.index) >= len(pays) || pays[u.index].value != u.value || !bytes.Equal(pays[u.index].script, u.script) {
+				return fmt.Errorf("%w: the transaction has no such output", ErrInvalidArgument)
+			}
+		}
+		break
 	}
 	b.markUsedLocked(u.script)
 	if _, gone := b.spent[fmt.Sprintf("%x:%d", u.txid, u.index)]; gone {
@@ -576,6 +844,13 @@ func (b *fakeBackend) setTransactionStatus(txid []byte, status txStatus) error {
 		return err
 	}
 	b.statuses[string(txid)] = status
+	// A created transaction reported mined leaves the inventory until a
+	// rewind below its height.
+	for i := range b.created {
+		if bytes.Equal(b.created[i].txid, txid) && status.kind == txMined {
+			b.created[i].minedAt = status.height
+		}
+	}
 	return nil
 }
 

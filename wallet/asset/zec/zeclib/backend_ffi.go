@@ -140,13 +140,9 @@ func (b *ffiBackend) transparentReceivers(accountID string) (watched []watchedAd
 }
 
 func (b *ffiBackend) summary(minConfirmations uint32) (*Summary, error) {
-	var minConf *uint32
-	if minConfirmations != 0 {
-		minConf = &minConfirmations
-	}
 	var summary *Summary
 	err := b.with(func(w *ffi.Wallet) error {
-		s, err := w.WalletSummary(minConf)
+		s, err := w.WalletSummary(optionalMinConf(minConfirmations))
 		if err != nil || s == nil {
 			return err
 		}
@@ -361,6 +357,349 @@ func (b *ffiBackend) scheduleNextCheck(address string, offset time.Duration) (at
 	return at, ok, err
 }
 
+// optionalMinConf converts a minimum number of confirmations, where zero
+// selects the default policy, for the bindings.
+func optionalMinConf(n uint32) *uint32 {
+	if n == 0 {
+		return nil
+	}
+	return &n
+}
+
+// optionalBytes converts a byte slice, where nil means none, for the
+// bindings.
+func optionalBytes(b []byte) *[]byte {
+	if b == nil {
+		return nil
+	}
+	return &b
+}
+
+// fromFFIPaidPool converts a pool of the bindings. A pool this package does
+// not know is an error, so that a new one cannot pass for another.
+func fromFFIPaidPool(p ffi.PaidPool) (PaidPool, error) {
+	switch p {
+	case ffi.PaidPoolIronwood:
+		return PaidIronwood, nil
+	case ffi.PaidPoolTransparent:
+		return PaidTransparent, nil
+	default:
+		return 0, wrapf(ErrInternal, "unknown paid pool %d", p)
+	}
+}
+
+func (b *ffiBackend) missingTransactions(txids [][]byte) (missing [][]byte, err error) {
+	err = b.with(func(w *ffi.Wallet) error {
+		missing, err = w.MissingTransactions(txids)
+		return err
+	})
+	return missing, err
+}
+
+func (b *ffiBackend) estimateTransfer(accountID, address string, amount uint64, memo []byte, minConfirmations uint32) (*TransferEstimate, error) {
+	var est *TransferEstimate
+	err := b.with(func(w *ffi.Wallet) error {
+		e, err := w.EstimateTransfer(accountID, address, amount, optionalBytes(memo), optionalMinConf(minConfirmations))
+		if err != nil {
+			return err
+		}
+		pool, err := fromFFIPaidPool(e.PaidPool)
+		if err != nil {
+			return err
+		}
+		est = &TransferEstimate{Fee: e.Fee, PaidAddress: e.PaidAddress, PaidPool: pool}
+		return nil
+	})
+	return est, err
+}
+
+func (b *ffiBackend) send(accountID string, seed []byte, address string, amount uint64, memo []byte, maxFee uint64, minConfirmations uint32) (*sendResult, error) {
+	var res *sendResult
+	err := b.with(func(w *ffi.Wallet) error {
+		r, err := w.Send(accountID, seed, address, amount, optionalBytes(memo), maxFee, optionalMinConf(minConfirmations))
+		if err != nil {
+			return err
+		}
+		res = fromFFISendResult(&r)
+		return nil
+	})
+	return res, err
+}
+
+func fromFFILeftBehind(l ffi.LeftBehind) LeftBehind {
+	return LeftBehind{
+		TransparentCount: l.TransparentCount,
+		TransparentValue: l.TransparentValue,
+		NoteCount:        l.NoteCount,
+		NoteValue:        l.NoteValue,
+	}
+}
+
+// fromFFISendResult converts the result of a send. The transactions exist
+// once it is called, so a pool this package does not know cannot fail the
+// conversion and lose their IDs. It is left as the zero PaidPool, which reads
+// as unknown.
+func fromFFISendResult(r *ffi.SendResult) *sendResult {
+	pool, _ := fromFFIPaidPool(r.PaidPool)
+	res := &sendResult{fee: r.Fee, paidAddress: r.PaidAddress, paidPool: pool}
+	if r.ReadError != nil {
+		res.readErr = *r.ReadError
+	}
+	for _, tx := range r.Transactions {
+		created := createdTx{txid: tx.Txid}
+		if tx.Raw != nil {
+			created.raw = *tx.Raw
+		}
+		res.transactions = append(res.transactions, created)
+	}
+	return res
+}
+
+func (b *ffiBackend) estimateSendMax(accountID, address string, memo []byte, minConfirmations uint32) (*SendMaxEstimate, error) {
+	var est *SendMaxEstimate
+	err := b.with(func(w *ffi.Wallet) error {
+		e, err := w.EstimateSendMax(accountID, address, optionalBytes(memo), optionalMinConf(minConfirmations))
+		if err != nil {
+			return err
+		}
+		pool, err := fromFFIPaidPool(e.PaidPool)
+		if err != nil {
+			return err
+		}
+		est = &SendMaxEstimate{
+			Amount:      e.Amount,
+			Fee:         e.Fee,
+			PaidAddress: e.PaidAddress,
+			PaidPool:    pool,
+			LeftBehind:  fromFFILeftBehind(e.LeftBehind),
+		}
+		return nil
+	})
+	return est, err
+}
+
+func (b *ffiBackend) sendMax(accountID string, seed []byte, address string, memo []byte, maxFee, expectedAmount uint64, minConfirmations uint32) (*sendMaxResult, error) {
+	var expected *uint64
+	if expectedAmount != 0 {
+		expected = &expectedAmount
+	}
+	var res *sendMaxResult
+	err := b.with(func(w *ffi.Wallet) error {
+		r, err := w.SendMax(accountID, seed, address, optionalBytes(memo), maxFee, expected, optionalMinConf(minConfirmations))
+		if err != nil {
+			return err
+		}
+		res = &sendMaxResult{
+			sendResult: *fromFFISendResult(&r.Result),
+			amount:     r.Amount,
+			leftBehind: fromFFILeftBehind(r.LeftBehind),
+		}
+		return nil
+	})
+	return res, err
+}
+
+func (b *ffiBackend) spendable(accountID string, minConfirmations uint32) (v SpendableValue, err error) {
+	err = b.with(func(w *ffi.Wallet) error {
+		s, err := w.Spendable(accountID, optionalMinConf(minConfirmations))
+		if err != nil {
+			return err
+		}
+		v = SpendableValue{Ironwood: s.Ironwood, Transparent: s.Transparent}
+		return nil
+	})
+	return v, err
+}
+
+func (b *ffiBackend) rebroadcastInventory() (txs []unminedTx, err error) {
+	err = b.with(func(w *ffi.Wallet) error {
+		list, err := w.RebroadcastInventory()
+		if err != nil {
+			return err
+		}
+		for _, tx := range list {
+			txs = append(txs, unminedTx{txid: tx.Txid, raw: tx.Raw, expiryHeight: tx.ExpiryHeight})
+		}
+		return nil
+	})
+	return txs, err
+}
+
+func (b *ffiBackend) ownsAddress(address string) (accountID string, ok bool, err error) {
+	err = b.with(func(w *ffi.Wallet) error {
+		id, err := w.OwnsAddress(address)
+		if err != nil || id == nil {
+			return err
+		}
+		accountID, ok = *id, true
+		return nil
+	})
+	return accountID, ok, err
+}
+
+func fromFFIRecord(r *ffi.TxRecord) (TxRecord, error) {
+	rec := TxRecord{
+		Seq:             r.Seq,
+		TxID:            displayTxID(r.Txid),
+		MinedHeight:     r.MinedHeight,
+		BlockTime:       r.BlockTime,
+		ExpiryHeight:    r.ExpiryHeight,
+		ExpiredUnmined:  r.ExpiredUnmined,
+		CreatedByWallet: r.CreatedByWallet,
+		RawPresent:      r.RawPresent,
+		BalanceDelta:    r.BalanceDelta,
+		TotalSpent:      r.TotalSpent,
+		TotalReceived:   r.TotalReceived,
+		Fee:             r.Fee,
+		IsShielding:     r.IsShielding,
+	}
+	for _, o := range r.Outputs {
+		var pool OutputPool
+		switch o.Pool {
+		case ffi.OutputPoolTransparent:
+			pool = OutputTransparent
+		case ffi.OutputPoolSapling:
+			pool = OutputSapling
+		case ffi.OutputPoolOrchard:
+			pool = OutputOrchard
+		case ffi.OutputPoolIronwood:
+			pool = OutputIronwood
+		default:
+			return TxRecord{}, wrapf(ErrInternal, "unknown output pool %d", o.Pool)
+		}
+		out := TxOutput{
+			Pool:        pool,
+			OutputIndex: o.OutputIndex,
+			Value:       o.Value,
+			ToWallet:    o.ToWallet,
+			IsChange:    o.IsChange,
+		}
+		if o.Address != nil {
+			out.Address = *o.Address
+		}
+		if o.Memo != nil {
+			out.Memo = *o.Memo
+		}
+		rec.Outputs = append(rec.Outputs, out)
+	}
+	return rec, nil
+}
+
+func fromFFIListing(l *ffi.TxListing) (*TxListing, error) {
+	out := &TxListing{}
+	if l.ChainTip != nil {
+		out.ChainTip = *l.ChainTip
+	}
+	for i := range l.Records {
+		rec, err := fromFFIRecord(&l.Records[i])
+		if err != nil {
+			return nil, err
+		}
+		out.Records = append(out.Records, rec)
+	}
+	return out, nil
+}
+
+func (b *ffiBackend) transactions(accountID string, afterSeq uint64, limit uint32) (listing *TxListing, err error) {
+	err = b.with(func(w *ffi.Wallet) error {
+		l, err := w.Transactions(accountID, afterSeq, limit)
+		if err != nil {
+			return err
+		}
+		listing, err = fromFFIListing(&l)
+		return err
+	})
+	return listing, err
+}
+
+func (b *ffiBackend) transaction(accountID string, txid []byte) (record *TxRecord, tip uint32, err error) {
+	err = b.with(func(w *ffi.Wallet) error {
+		l, err := w.Transaction(accountID, txid)
+		if err != nil {
+			return err
+		}
+		if l.ChainTip != nil {
+			tip = *l.ChainTip
+		}
+		if l.Record != nil {
+			rec, err := fromFFIRecord(l.Record)
+			if err != nil {
+				return err
+			}
+			record = &rec
+		}
+		return nil
+	})
+	return record, tip, err
+}
+
+func (b *ffiBackend) openTransactions(accountID string, depth uint32) (listing *TxListing, err error) {
+	err = b.with(func(w *ffi.Wallet) error {
+		l, err := w.OpenTransactions(accountID, depth)
+		if err != nil {
+			return err
+		}
+		listing, err = fromFFIListing(&l)
+		return err
+	})
+	return listing, err
+}
+
+// parseAddress parses an address with the Rust library, which takes no
+// database.
+func parseAddress(network Network, address string) (*ParsedAddress, error) {
+	p, err := ffi.ParseAddress(toFFINetwork(network), address)
+	if err != nil {
+		return nil, convertError(err)
+	}
+	out := &ParsedAddress{Payable: p.Payable}
+	switch p.Kind {
+	case ffi.AddressKindTransparent:
+		out.Kind = AddressTransparent
+	case ffi.AddressKindUnified:
+		out.Kind = AddressUnified
+	case ffi.AddressKindSapling:
+		out.Kind = AddressSapling
+	case ffi.AddressKindTex:
+		out.Kind = AddressTex
+	default:
+		return nil, wrapf(ErrInternal, "unknown address kind %d", p.Kind)
+	}
+	for _, r := range p.Receivers {
+		rec := Receiver{}
+		switch r.Kind {
+		case ffi.ReceiverKindOrchard:
+			rec.Kind = ReceiverOrchard
+		case ffi.ReceiverKindSapling:
+			rec.Kind = ReceiverSapling
+		case ffi.ReceiverKindTransparent:
+			rec.Kind = ReceiverTransparent
+		default:
+			return nil, wrapf(ErrInternal, "unknown receiver kind %d", r.Kind)
+		}
+		if r.Address != nil {
+			rec.Address = *r.Address
+		}
+		out.Receivers = append(out.Receivers, rec)
+	}
+	out.ExpiryHeight = p.ExpiryHeight
+	out.ExpiryTime = p.ExpiryTime
+	if p.PaidPool != nil {
+		pool, err := fromFFIPaidPool(*p.PaidPool)
+		if err != nil {
+			return nil, err
+		}
+		out.PaidPool = pool
+	}
+	if p.PaidAddress != nil {
+		out.PaidAddress = *p.PaidAddress
+	}
+	if p.Unpayable != nil {
+		out.Unpayable = *p.Unpayable
+	}
+	return out, nil
+}
+
 // transparentReceiver returns the transparent receiver of a unified address
 // as a transparent address, or the empty string if the address has none.
 func transparentReceiver(network Network, unifiedAddress string) (string, error) {
@@ -408,6 +747,28 @@ func convertError(err error) error {
 		return re
 	case *ffi.WalletErrorScan:
 		return &scanError{height: e.AtHeight, reason: e.Message}
+	case *ffi.WalletErrorInsufficientFunds:
+		return &InsufficientFundsError{Available: e.Available, Required: e.Required}
+	case *ffi.WalletErrorNotSynced:
+		return wrapf(ErrNotSynced, "%s", e.Message)
+	case *ffi.WalletErrorFeeTooHigh:
+		return &FeeTooHighError{Fee: e.Fee, MaxFee: e.MaxFee}
+	case *ffi.WalletErrorAmountChanged:
+		return &AmountChangedError{Expected: e.Expected, Actual: e.Actual}
+	case *ffi.WalletErrorTooLarge:
+		return wrapf(ErrTooLarge, "%s", e.Message)
+	case *ffi.WalletErrorUnsupportedRecipient:
+		return wrapf(ErrUnsupportedRecipient, "%s", e.Message)
+	case *ffi.WalletErrorAddressExpired:
+		return wrapf(ErrAddressExpired, "%s", e.Message)
+	case *ffi.WalletErrorAmountBelowMinimum:
+		return &AmountBelowMinimumError{Minimum: e.Minimum}
+	case *ffi.WalletErrorMemoNotAllowed:
+		return ErrMemoNotAllowed
+	case *ffi.WalletErrorSeedMismatch:
+		return ErrSeedMismatch
+	case *ffi.WalletErrorSend:
+		return wrapf(ErrSend, "%s", e.Message)
 	case *ffi.WalletErrorInternal:
 		return wrapf(ErrInternal, "%s", e.Message)
 	default:
@@ -500,6 +861,7 @@ func fromFFISummary(s *ffi.WalletSummary) *Summary {
 			AccountID:   b.AccountUuid,
 			Ironwood:    fromFFIPoolBalance(b.Ironwood),
 			Transparent: fromFFIPoolBalance(b.Transparent),
+			Coinbase:    fromFFIPoolBalance(b.Coinbase),
 			Total:       b.Total,
 		}
 	}

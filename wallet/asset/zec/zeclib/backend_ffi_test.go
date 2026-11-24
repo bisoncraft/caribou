@@ -9,7 +9,9 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -713,6 +715,29 @@ func TestFFIClosed(t *testing.T) {
 			_, _, err := be.scheduleNextCheck("x", time.Second)
 			return err
 		},
+		"estimateTransfer": func() error {
+			_, err := be.estimateTransfer(id, testRecipient, 1, nil, 0)
+			return err
+		},
+		"send": func() error {
+			_, err := be.send(id, testSeed, testRecipient, 1, nil, 1, 0)
+			return err
+		},
+		"estimateSendMax": func() error {
+			_, err := be.estimateSendMax(id, testRecipient, nil, 0)
+			return err
+		},
+		"sendMax": func() error {
+			_, err := be.sendMax(id, testSeed, testRecipient, nil, 1, 0, 0)
+			return err
+		},
+		"spendable":            func() error { _, err := be.spendable(id, 0); return err },
+		"rebroadcastInventory": func() error { _, err := be.rebroadcastInventory(); return err },
+		"missingTransactions":  func() error { _, err := be.missingTransactions([][]byte{make([]byte, 32)}); return err },
+		"transactions":         func() error { _, err := be.transactions(id, 0, 1); return err },
+		"transaction":          func() error { _, _, err := be.transaction(id, make([]byte, 32)); return err },
+		"openTransactions":     func() error { _, err := be.openTransactions(id, 1); return err },
+		"ownsAddress":          func() error { _, _, err := be.ownsAddress(testRecipient); return err },
 	}
 	for name, call := range calls {
 		if err := call(); !errors.Is(err, ErrClosed) {
@@ -747,6 +772,13 @@ func TestConvertError(t *testing.T) {
 		{ffi.NewWalletErrorAccountNotFound(), ErrAccountNotFound, ""},
 		{ffi.NewWalletErrorAddressGapLimit("index 10"), ErrAddressGapLimit, "index 10"},
 		{ffi.NewWalletErrorInternal("panic: oops"), ErrInternal, "panic: oops"},
+		{ffi.NewWalletErrorNotSynced("no anchor"), ErrNotSynced, "no anchor"},
+		{ffi.NewWalletErrorTooLarge("3000000 bytes"), ErrTooLarge, "3000000 bytes"},
+		{ffi.NewWalletErrorUnsupportedRecipient("a TEX address"), ErrUnsupportedRecipient, "a TEX address"},
+		{ffi.NewWalletErrorMemoNotAllowed(), ErrMemoNotAllowed, ""},
+		{ffi.NewWalletErrorSeedMismatch(), ErrSeedMismatch, ""},
+		{ffi.NewWalletErrorSend("multi-step"), ErrSend, "multi-step"},
+		{ffi.NewWalletErrorAddressExpired("at height 9"), ErrAddressExpired, "at height 9"},
 	}
 	for _, tt := range sentinels {
 		err := convertError(tt.in)
@@ -756,6 +788,36 @@ func TestConvertError(t *testing.T) {
 		if strings.Contains(err.Error(), "WalletError") {
 			t.Errorf("the generated error text leaks: %v", err)
 		}
+	}
+
+	var funds *InsufficientFundsError
+	if err := convertError(ffi.NewWalletErrorInsufficientFunds(5, 10_005)); !errors.As(err, &funds) ||
+		funds.Available != 5 || funds.Required != 10_005 || !errors.Is(err, ErrInsufficientFunds) {
+		t.Errorf("insufficient funds: %v", err)
+	}
+	var fee *FeeTooHighError
+	if err := convertError(ffi.NewWalletErrorFeeTooHigh(15_000, 10_000)); !errors.As(err, &fee) ||
+		fee.Fee != 15_000 || fee.MaxFee != 10_000 || !errors.Is(err, ErrFeeTooHigh) {
+		t.Errorf("fee too high: %v", err)
+	}
+	var below *AmountBelowMinimumError
+	if err := convertError(ffi.NewWalletErrorAmountBelowMinimum(54)); !errors.As(err, &below) ||
+		below.Minimum != 54 || !errors.Is(err, ErrAmountBelowMinimum) {
+		t.Errorf("amount below the minimum: %v", err)
+	}
+	if p, err := fromFFIPaidPool(ffi.PaidPoolIronwood); err != nil || p != PaidIronwood {
+		t.Errorf("Ironwood: %v %v", p, err)
+	}
+	if p, err := fromFFIPaidPool(ffi.PaidPoolTransparent); err != nil || p != PaidTransparent {
+		t.Errorf("transparent: %v %v", p, err)
+	}
+	if _, err := fromFFIPaidPool(ffi.PaidPool(99)); !errors.Is(err, ErrInternal) {
+		t.Errorf("an unknown pool: %v", err)
+	}
+	var changed *AmountChangedError
+	if err := convertError(ffi.NewWalletErrorAmountChanged(5, 6)); !errors.As(err, &changed) ||
+		changed.Expected != 5 || changed.Actual != 6 || !errors.Is(err, ErrAmountChanged) {
+		t.Errorf("amount changed: %v", err)
 	}
 
 	var continuity *chainContinuityError
@@ -1006,4 +1068,217 @@ func TestWalkCoversUnusedAddressesBeyondTheGap(t *testing.T) {
 	eventually(t, "the output at the first address", func() bool {
 		return transparentBalance(t, e) == value
 	})
+}
+
+// TestFFISend runs the send calls of the Rust backend against the fake
+// chain, whose blocks hold nothing: every payment fails on funds, after the
+// checks that come first.
+func TestFFISend(t *testing.T) {
+	kind := backendKinds[len(backendKinds)-1]
+	e := newEnv(t, kind, 150, nil)
+	account := e.createAccount(100)
+	e.connect()
+	e.waitSynced(150)
+	address, err := e.w.Address(account.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := e.w.EstimateTransfer(account.ID, address, 100_000, nil); !errors.Is(err, ErrInsufficientFunds) {
+		t.Errorf("estimate: %v", err)
+	}
+	if _, err := e.w.EstimateTransfer(account.ID, testRecipient, 100_000, []byte{}); !errors.Is(err, ErrMemoNotAllowed) {
+		t.Errorf("an empty memo to a transparent address: %v", err)
+	}
+	var funds *InsufficientFundsError
+	res, err := e.w.Send(context.Background(), account.ID, testSeed, address, 100_000, nil, 20_000)
+	if !errors.As(err, &funds) || funds.Available != 0 || res != nil {
+		t.Errorf("send: %+v, %v", res, err)
+	}
+	other := bytes.Repeat([]byte{9}, 32)
+	if _, err := e.w.Send(context.Background(), account.ID, other, address, 100_000, nil, 20_000); !errors.Is(err, ErrSeedMismatch) {
+		t.Errorf("send with another seed: %v", err)
+	}
+	if _, err := e.w.Send(context.Background(), account.ID, testSeed, "zregtestsapling1uwt3xqagtnemsucergl4f5lcjj0qsh4hu2avqs6gp3fq62yke38dcyxg5ddewwx5pnjrkfmrr6w", 1, nil, 20_000); !errors.Is(err, ErrUnsupportedRecipient) {
+		t.Errorf("send to a Sapling address: %v", err)
+	}
+	if v, err := e.w.Spendable(account.ID); err != nil || v != (SpendableValue{}) {
+		t.Errorf("spendable: %+v, %v", v, err)
+	}
+	if inv, err := e.be.rebroadcastInventory(); err != nil || len(inv) != 0 {
+		t.Errorf("inventory: %d, %v", len(inv), err)
+	}
+	if _, err := e.w.EstimateSendMax(account.ID, address, nil); !errors.As(err, &funds) || funds.Available != 0 {
+		t.Errorf("estimate send max: %v", err)
+	}
+	if res, err := e.w.SendMax(context.Background(), account.ID, testSeed, address, nil, 20_000, 0); !errors.Is(err, ErrInsufficientFunds) || res != nil {
+		t.Errorf("send max: %+v, %v", res, err)
+	}
+	if _, err := e.w.SendMax(context.Background(), account.ID, other, address, nil, 20_000, 0); !errors.Is(err, ErrSeedMismatch) {
+		t.Errorf("send max with another seed: %v", err)
+	}
+	if _, err := e.w.EstimateTransfer(account.ID, testRecipient, 53, nil); !errors.Is(err, ErrAmountBelowMinimum) {
+		t.Errorf("53 zatoshis to a transparent address: %v", err)
+	}
+	if id, ok, err := e.w.OwnsAddress(address); err != nil || !ok || id != account.ID {
+		t.Errorf("own address: %q %v %v", id, ok, err)
+	}
+	if _, ok, err := e.w.OwnsAddress(testRecipient); err != nil || ok {
+		t.Errorf("foreign address: %v %v", ok, err)
+	}
+}
+
+// TestEveryErrorIsMapped makes sure that every variant of the Rust error type
+// has its own Go error. The variants are read from the constructors in the
+// generated bindings, so a variant added to the Rust crate fails this test
+// until it is mapped here and in convertError.
+func TestEveryErrorIsMapped(t *testing.T) {
+	src, err := os.ReadFile("internal/ffi/ffi.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	variants := regexp.MustCompile(`(?m)^func NewWalletError(\w+)\(`).FindAllStringSubmatch(string(src), -1)
+	safe := uint32(1)
+	mapped := map[string]struct {
+		in   *ffi.WalletError
+		want func(error) bool
+	}{
+		"InvalidArgument":      {ffi.NewWalletErrorInvalidArgument("x"), is(ErrInvalidArgument)},
+		"Database":             {ffi.NewWalletErrorDatabase("x"), is(ErrDatabase)},
+		"SeedRequired":         {ffi.NewWalletErrorSeedRequired(), is(ErrSeedRequired)},
+		"SeedNotRelevant":      {ffi.NewWalletErrorSeedNotRelevant(), is(ErrSeedNotRelevant)},
+		"AccountNotFound":      {ffi.NewWalletErrorAccountNotFound(), is(ErrAccountNotFound)},
+		"AddressGapLimit":      {ffi.NewWalletErrorAddressGapLimit("x"), is(ErrAddressGapLimit)},
+		"ChainContinuity":      {ffi.NewWalletErrorChainContinuity(1, "x"), as[*chainContinuityError]},
+		"RewindInvalid":        {ffi.NewWalletErrorRewindInvalid(1, &safe), as[*rewindError]},
+		"Scan":                 {ffi.NewWalletErrorScan(1, "x"), as[*scanError]},
+		"InsufficientFunds":    {ffi.NewWalletErrorInsufficientFunds(1, 2), is(ErrInsufficientFunds)},
+		"NotSynced":            {ffi.NewWalletErrorNotSynced("x"), is(ErrNotSynced)},
+		"FeeTooHigh":           {ffi.NewWalletErrorFeeTooHigh(2, 1), is(ErrFeeTooHigh)},
+		"UnsupportedRecipient": {ffi.NewWalletErrorUnsupportedRecipient("x"), is(ErrUnsupportedRecipient)},
+		"TooLarge":             {ffi.NewWalletErrorTooLarge("x"), is(ErrTooLarge)},
+		"AmountChanged":        {ffi.NewWalletErrorAmountChanged(1, 2), is(ErrAmountChanged)},
+		"AddressExpired":       {ffi.NewWalletErrorAddressExpired("x"), is(ErrAddressExpired)},
+		"AmountBelowMinimum":   {ffi.NewWalletErrorAmountBelowMinimum(54), is(ErrAmountBelowMinimum)},
+		"MemoNotAllowed":       {ffi.NewWalletErrorMemoNotAllowed(), is(ErrMemoNotAllowed)},
+		"SeedMismatch":         {ffi.NewWalletErrorSeedMismatch(), is(ErrSeedMismatch)},
+		"Send":                 {ffi.NewWalletErrorSend("x"), is(ErrSend)},
+		"Internal":             {ffi.NewWalletErrorInternal("x"), is(ErrInternal)},
+	}
+	if len(variants) == 0 {
+		t.Fatal("no error constructors found in the bindings")
+	}
+	for _, v := range variants {
+		name := v[1]
+		m, ok := mapped[name]
+		if !ok {
+			t.Errorf("WalletError variant %s has no case in this test", name)
+			continue
+		}
+		err := convertError(m.in)
+		if !m.want(err) {
+			t.Errorf("WalletError variant %s converts to %v", name, err)
+		}
+		if name != "Internal" && errors.Is(err, ErrInternal) {
+			t.Errorf("WalletError variant %s is not mapped: %v", name, err)
+		}
+	}
+}
+
+func is(target error) func(error) bool {
+	return func(err error) bool { return errors.Is(err, target) }
+}
+
+func as[T error](err error) bool {
+	var target T
+	return errors.As(err, &target)
+}
+
+// A coinbase output paid to a wallet address is recorded through the funding
+// fetch and is never selectable by a payment, while a regular output beside
+// it is.
+func TestFFICoinbaseOutputIsNotSpendable(t *testing.T) {
+	kind := backendKinds[len(backendKinds)-1]
+	e, address := fundEnv(t, kind)
+	plantCoinbase(t, e, kind, address, 50_000, 120)
+	plantFunded(t, e, kind, address, 30_000, 121, 9)
+	e.connect()
+	e.waitSynced(150)
+	eventually(t, "both outputs recorded", func() bool { return transparentBalance(t, e) == 80_000 })
+	v, err := e.w.Spendable(e.account.ID)
+	if err != nil || v.Transparent != 30_000 {
+		t.Fatalf("spendable: %+v, %v", v, err)
+	}
+	summary, err := e.w.Summary()
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, _ := summary.Balance(e.account.ID)
+	if b.Transparent.Total != 30_000 || b.Coinbase.Total != 50_000 || b.Total != 80_000 {
+		t.Errorf("the summary does not keep coinbase apart: %+v", b)
+	}
+}
+
+func TestFFIHistoryAndParse(t *testing.T) {
+	kind := backendKinds[len(backendKinds)-1]
+	e, address := fundEnv(t, kind)
+	txid := plantFunded(t, e, kind, address, 70_000, 120, 4)
+	e.connect()
+	e.waitSynced(150)
+	eventually(t, "the output recorded", func() bool { return transparentBalance(t, e) == 70_000 })
+
+	listing, err := e.w.Transactions(e.account.ID, 0, 10)
+	if err != nil || listing.ChainTip != 150 || len(listing.Records) != 1 {
+		t.Fatalf("Transactions: %+v, %v", listing, err)
+	}
+	r := listing.Records[0]
+	if r.TxID != displayTxID(txid) || r.MinedHeight == nil || *r.MinedHeight != 120 || r.BlockTime == nil ||
+		!r.RawPresent || r.CreatedByWallet || r.Fee != nil || r.TotalReceived != 70_000 {
+		t.Errorf("record: %+v", r)
+	}
+	if len(r.Outputs) != 1 || r.Outputs[0].Pool != OutputTransparent || r.Outputs[0].Address != address || !r.Outputs[0].ToWallet {
+		t.Errorf("outputs: %+v", r.Outputs)
+	}
+	got, tip, err := e.w.Transaction(e.account.ID, r.TxID)
+	if err != nil || got == nil || got.Seq != r.Seq || tip != 150 {
+		t.Errorf("Transaction: %+v %d %v", got, tip, err)
+	}
+	if got, _, err := e.w.Transaction(e.account.ID, strings.Repeat("00", 32)); err != nil || got != nil {
+		t.Errorf("an unknown transaction: %+v %v", got, err)
+	}
+	if _, _, err := e.w.Transaction(e.account.ID, "zz"); !errors.Is(err, ErrInvalidArgument) {
+		t.Errorf("a malformed ID: %v", err)
+	}
+	open, err := e.w.OpenTransactions(e.account.ID, 31)
+	if err != nil || len(open.Records) != 1 {
+		t.Errorf("open at 31 confirmations: %+v, %v", open, err)
+	}
+	if open, err := e.w.OpenTransactions(e.account.ID, 30); err != nil || len(open.Records) != 0 {
+		t.Errorf("open at 30: %+v, %v", open, err)
+	}
+
+	unified, err := e.w.Address(e.account.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := ParseAddress(testNetwork, unified)
+	if err != nil || p.Kind != AddressUnified || !p.Payable || p.PaidPool != PaidIronwood || len(p.Receivers) != 2 {
+		t.Fatalf("ParseAddress: %+v, %v", p, err)
+	}
+	if p.Receivers[0].Kind != ReceiverOrchard || p.Receivers[1].Kind != ReceiverTransparent || p.Receivers[1].Address != address {
+		t.Errorf("receivers: %+v", p.Receivers)
+	}
+	if p.ExpiryHeight != nil || p.ExpiryTime != nil {
+		t.Errorf("an address without an expiry has one: %v %v", p.ExpiryHeight, p.ExpiryTime)
+	}
+	if id, ok, err := e.w.OwnsAddress(p.Receivers[0].Address); err != nil || !ok || id != e.account.ID {
+		t.Errorf("the Orchard receiver is not the wallet's: %q %v %v", id, ok, err)
+	}
+	p, err = ParseAddress(testNetwork, address)
+	if err != nil || p.Kind != AddressTransparent || p.PaidPool != PaidTransparent || p.PaidAddress != address {
+		t.Errorf("a transparent address: %+v, %v", p, err)
+	}
+	if _, err := ParseAddress(testNetwork, "nonsense"); !errors.Is(err, ErrInvalidArgument) {
+		t.Errorf("junk: %v", err)
+	}
 }

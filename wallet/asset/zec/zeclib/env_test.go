@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -236,8 +237,10 @@ func (e *env) waitSynced(height uint32) SyncStatus {
 	e.t.Helper()
 	return e.statuses.wait(e.t, fmt.Sprintf("sync to height %d", height), func(s SyncStatus) bool {
 		// A failed attempt leaves the state as it was, so a status can
-		// say synced and carry an error.
-		return s.State == SyncSynced && s.Err == nil && s.FullyScanned == height && s.ChainTip == height
+		// say synced and carry an error. An unrecorded output is reported
+		// by an attempt that succeeded.
+		ok := s.Err == nil || errors.Is(s.Err, ErrOutputUnrecorded)
+		return s.State == SyncSynced && ok && s.FullyScanned == height && s.ChainTip == height
 	})
 }
 
