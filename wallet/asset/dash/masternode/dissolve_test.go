@@ -368,8 +368,21 @@ func TestUnanimousFlow(t *testing.T) {
 	if err != nil || len(got) != 3 {
 		t.Fatalf("blob: %d sigs, %v", len(got), err)
 	}
-	if _, err := ReviewDissolution(tx, m, 0, 5000); err != nil {
+	rv, err := ReviewDissolution(tx, m, 0, 5000)
+	if err != nil {
 		t.Fatal(err)
+	}
+	// The signatures travel beside the transaction, so they are checked when
+	// added back.
+	if err := rv.AddSigs(got); err != nil {
+		t.Fatal(err)
+	}
+	if err := rv.Complete(); err != nil {
+		t.Fatal(err)
+	}
+	got[0].Signature = got[1].Signature
+	if err := rv.AddSigs(got); err == nil {
+		t.Fatal("another share's signature accepted")
 	}
 }
 
@@ -582,8 +595,8 @@ func TestStandby(t *testing.T) {
 	if _, _, err := ParseStandby(data, &moved); err == nil {
 		t.Fatal("standby accepted after the share table changed")
 	}
-	// The signature does not cover the type, so a record whose transaction was
-	// retyped, or whose valid-from height was edited, must be refused.
+	// A record whose transaction was retyped, or whose valid-from height was
+	// edited, must be refused.
 	retyped := &bisonwire.Tx{Chain: "dash"}
 	if err := retyped.Deserialize(bytes.NewReader(mustHexBytes(t, s.Tx))); err != nil {
 		t.Fatal(err)
@@ -664,7 +677,7 @@ func TestFeeForHugeRate(t *testing.T) {
 // more caps it.
 func TestFeeForCapBoundary(t *testing.T) {
 	m := coreMN(t)
-	d, err := NewDissolution(m, DissolveParams{Actor: 0})
+	d, err := NewDissolution(m, DissolveParams{Actor: 0, Fee: 1})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -698,5 +711,91 @@ func TestParseStandbyTrailingBytes(t *testing.T) {
 	}
 	if _, _, err := ParseStandby(data, m); !errors.Is(err, ErrInvalidDissolution) || !strings.Contains(err.Error(), "trailing") {
 		t.Fatalf("want trailing bytes refused, got %v", err)
+	}
+}
+
+// Dash Core builds an unsigned unanimous dissolution with no signatures in the
+// payload and refuses one that carries any. The exchange form must match, and
+// Core's own signatures must verify against it.
+func TestUnanimousExchangeForm(t *testing.T) {
+	m := coreMN(t)
+	core, _ := loadVectorTx(t, "dis")
+	pd, sigs := vectorSigs(t, core)
+
+	stripped, err := cloneTx(core)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pd.Sigs = nil
+	var b bytes.Buffer
+	if err := pd.Serialize(&b); err != nil {
+		t.Fatal(err)
+	}
+	stripped.ExtraPayload = b.Bytes()
+
+	rv, err := ReviewDissolution(stripped, m, 0, MaxDissolutionFee)
+	if err != nil {
+		t.Fatalf("Core's unsigned form refused: %v", err)
+	}
+	if err := rv.AddSigs(sigs); err != nil {
+		t.Fatalf("Core's signatures do not verify: %v", err)
+	}
+	if err := rv.Complete(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Our blob is the same form.
+	m2, _ := threeOwners(t)
+	d, err := NewDissolution(m2, DissolveParams{Actor: 1, Unanimous: true, Fee: 5000})
+	if err != nil {
+		t.Fatal(err)
+	}
+	blob, err := d.Blob()
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := json.Marshal(blob)
+	tx, _, err := ParseBlob(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got protx.ProDisTx
+	if err := protx.Parse(tx.ExtraPayload, &got); err != nil || len(got.Sigs) != 0 {
+		t.Fatalf("blob payload carries %d signatures, %v", len(got.Sigs), err)
+	}
+	if _, err := ReviewDissolution(tx, m2, 0, 5000); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A standby that no default node would relay cannot be re-signed or bumped, so
+// it must be refused when made.
+func TestFeeFloors(t *testing.T) {
+	m, keys := threeOwners(t)
+	if _, err := NewDissolution(m, DissolveParams{Actor: 0}); err == nil {
+		t.Fatal("zero fee accepted")
+	}
+	floor, err := FeeFor(m, false, 1000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewStandby(m, 2, keys[2], floor-1); err == nil {
+		t.Fatal("standby under the relay floor accepted")
+	}
+	if _, err := NewStandby(m, 2, keys[2], floor); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// The reviewer must be able to see that it pays the fee.
+func TestReviewShowsActorAndFee(t *testing.T) {
+	m, _ := threeOwners(t)
+	d, _ := NewDissolution(m, DissolveParams{Actor: 1, Unanimous: true, Fee: 5000})
+	rv, err := ReviewDissolution(d.tx, m, 1, 5000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rv.Actor() != 1 || rv.Fee() != 5000 {
+		t.Fatalf("actor %d fee %d", rv.Actor(), rv.Fee())
 	}
 }

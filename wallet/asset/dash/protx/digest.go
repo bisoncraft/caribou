@@ -225,11 +225,10 @@ func (p *ProUpSharedRegTx) PayloadHash() (chainhash.Hash, error) {
 // VerifyCompact checks a share owner's compact signature: 65 bytes, a header
 // between 27 and 34 and a recovered public key whose hash160, in the form the
 // header says, is keyID (the header is checked by the recovery).
-// It also requires S to be at most half the group order. That is this wallet's
-// policy and not a Dash Core rule as far as is known: Core's key recovery
-// accepts a high S, so a signature this refuses may still confirm. It keeps a
-// signature from being changed by a third party without the key, and the
-// signatures this wallet makes always pass it.
+// It also requires S to be at most half the group order, as Dash Core's
+// CHashSigner::VerifyHashCanonical does for shared payloads, so a high-S
+// signature would not confirm. It also keeps a signature from being changed by
+// a third party without the key.
 func VerifyCompact(hash chainhash.Hash, keyID [KeyIDSize]byte, sig []byte) error {
 	if len(sig) != CompactSigSize {
 		return fmt.Errorf("%w: %d bytes", ErrBadSignature, len(sig))

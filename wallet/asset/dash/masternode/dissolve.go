@@ -38,6 +38,8 @@ const (
 	// taken from the actor's share.
 	MaxDissolutionFee = 1_000_000
 	txTypeProDis      = 10
+	// minRelayFeeRate is Dash Core's default minrelaytxfee, in duffs per kB.
+	minRelayFeeRate = 1000
 )
 
 // ErrInvalidDissolution is wrapped by errors for a dissolution that Dash Core
@@ -153,6 +155,9 @@ type DissolveParams struct {
 // Preview returns what the dissolution pays each share, so a user can see the
 // penalty and fee before signing.
 func (m *SharedMN) Preview(p DissolveParams) (Preview, error) {
+	if p.Fee <= 0 {
+		return Preview{}, badDis("fee %d", p.Fee)
+	}
 	outs, err := m.outputs(p)
 	if err != nil {
 		return Preview{}, err
@@ -232,8 +237,17 @@ type Dissolution struct {
 
 // NewDissolution builds the unsigned dissolution: a transaction with the
 // collateral as its one input and the payout outputs, and a payload with empty
-// signature slots.
+// signature slots. The fee must be positive, as Dash Core requires.
 func NewDissolution(m *SharedMN, p DissolveParams) (*Dissolution, error) {
+	if p.Fee <= 0 {
+		return nil, badDis("fee %d", p.Fee)
+	}
+	return newDissolution(m, p)
+}
+
+// newDissolution is NewDissolution without the fee floor, which FeeFor needs to
+// size a transaction before a fee is chosen.
+func newDissolution(m *SharedMN, p DissolveParams) (*Dissolution, error) {
 	outs, err := m.outputs(p)
 	if err != nil {
 		return nil, err
@@ -286,7 +300,7 @@ func FeeFor(m *SharedMN, unanimous bool, feeRate int64) (int64, error) {
 	if feeRate < 0 {
 		return 0, badDis("fee rate %d", feeRate)
 	}
-	d, err := NewDissolution(m, DissolveParams{Actor: 0, Unanimous: unanimous})
+	d, err := newDissolution(m, DissolveParams{Actor: 0, Unanimous: unanimous})
 	if err != nil {
 		return 0, err
 	}
@@ -391,8 +405,25 @@ func (d *Dissolution) slot(i int) (int, error) {
 	return i, nil
 }
 
+// hash is the digest the signatures cover. It is computed with a full set of
+// signature slots, since the count is part of the digest and the exchanged form
+// of a unanimous dissolution carries none.
 func (d *Dissolution) hash() (chainhash.Hash, error) {
-	return d.pd.SignHash(d.tx)
+	pd := d.pd
+	pd.Sigs = make([][protx.CompactSigSize]byte, len(d.pd.Sigs))
+	return pd.SignHash(d.tx)
+}
+
+// Actor is the share that dissolves and pays the fee.
+func (d *Dissolution) Actor() int { return int(d.pd.ActorIndex) }
+
+// Fee is what the dissolution leaves as fee, paid by the actor's share.
+func (d *Dissolution) Fee() int64 {
+	var out int64
+	for _, o := range d.tx.TxOut {
+		out += o.Value
+	}
+	return d.mn.total() - out
 }
 
 // Sign signs the dissolution as share i with the share's owner key.
@@ -459,12 +490,29 @@ func (d *Dissolution) Raw() ([]byte, error) {
 }
 
 // Blob returns the dissolution with the signatures so far, in the form owners
-// exchange.
+// exchange. As in Dash Core, a unanimous dissolution's transaction carries no
+// signatures, which travel in Blob.Signatures.
 func (d *Dissolution) Blob() (Blob, error) {
-	raw, err := d.Raw()
-	if err != nil {
+	tx := d.tx
+	if len(d.pd.Sigs) > 1 {
+		cp, err := cloneTx(d.tx)
+		if err != nil {
+			return Blob{}, err
+		}
+		pd := d.pd
+		pd.Sigs = nil
+		var b bytes.Buffer
+		if err := pd.Serialize(&b); err != nil {
+			return Blob{}, err
+		}
+		cp.ExtraPayload = b.Bytes()
+		tx = cp
+	}
+	var rb bytes.Buffer
+	if err := tx.Serialize(&rb); err != nil {
 		return Blob{}, err
 	}
+	raw := rb.Bytes()
 	out := Blob{Tx: hex.EncodeToString(raw)}
 	for i, s := range d.pd.Sigs {
 		if s == ([protx.CompactSigSize]byte{}) {
@@ -486,6 +534,13 @@ func (d *Dissolution) Blob() (Blob, error) {
 // Dash Core also accepts a dissolution that pays more to other shares when all
 // owners sign it, which this refuses.
 //
+// The transaction may carry no signatures, which is how Dash Core exchanges an
+// unsigned unanimous dissolution, or one slot per share.
+//
+// own is only range-checked. Dash Core lets any owner be the actor of a
+// unanimous dissolution, so the reviewer may be the one who pays the fee: the
+// caller must show Actor and Fee of the result before signing.
+//
 // It checks the rules Dash Core applies and those signatures already in the
 // transaction. It does not modify tx.
 func ReviewDissolution(tx *bisonwire.Tx, m *SharedMN, own int, maxFee int64) (*Dissolution, error) {
@@ -501,6 +556,9 @@ func ReviewDissolution(tx *bisonwire.Tx, m *SharedMN, own int, maxFee int64) (*D
 	var pd protx.ProDisTx
 	if err := protx.Parse(tx.ExtraPayload, &pd); err != nil {
 		return nil, fmt.Errorf("%w: payload: %w", ErrInvalidDissolution, err)
+	}
+	if len(pd.Sigs) == 0 {
+		pd.Sigs = make([][protx.CompactSigSize]byte, len(m.Shares))
 	}
 	if len(pd.Sigs) != len(m.Shares) {
 		return nil, badDis("not a unanimous dissolution")
@@ -538,6 +596,9 @@ func ReviewDissolution(tx *bisonwire.Tx, m *SharedMN, own int, maxFee int64) (*D
 		return nil, err
 	}
 	d := &Dissolution{mn: m, tx: cp, pd: pd}
+	if err := d.sync(); err != nil {
+		return nil, err
+	}
 	h, err := d.hash()
 	if err != nil {
 		return nil, err
@@ -555,8 +616,9 @@ func ReviewDissolution(tx *bisonwire.Tx, m *SharedMN, own int, maxFee int64) (*D
 
 // Standby is a signed unilateral dissolution that pays no penalty, kept to be
 // broadcast later. It is valid from ValidFromHeight, after the early period, so
-// it is a way out that does not need the other share owners, even if this
-// wallet's keys are lost. It is data: where it is stored is up to the caller.
+// it is a way out that needs neither the owner key nor the other share owners.
+// The refund scripts must be spendable on their own, since they receive the
+// payout. It is data: where it is stored is up to the caller.
 type Standby struct {
 	ProTxHash       chainhash.Hash `json:"proTxHash"`
 	Actor           int            `json:"actor"`
@@ -566,8 +628,16 @@ type Standby struct {
 }
 
 // NewStandby builds and signs a standby dissolution by the actor share, with
-// the actor's owner key.
+// the actor's owner key. The fee must meet the default relay floor of 1000
+// duffs per kilobyte, since a standby cannot be re-signed or fee-bumped.
 func NewStandby(m *SharedMN, actor int, key *btcec.PrivateKey, fee int64) (*Standby, error) {
+	floor, err := FeeFor(m, false, minRelayFeeRate)
+	if err != nil {
+		return nil, err
+	}
+	if fee < floor {
+		return nil, badDis("standby fee %d is under the relay floor %d", fee, floor)
+	}
 	d, err := NewDissolution(m, DissolveParams{Actor: actor, Fee: fee})
 	if err != nil {
 		return nil, err
@@ -619,9 +689,9 @@ func ParseStandby(data []byte, m *SharedMN) (*Standby, *bisonwire.Tx, error) {
 	if err := protx.Parse(tx.ExtraPayload, &pd); err != nil {
 		return nil, nil, badDis("standby payload: %v", err)
 	}
-	// The signature does not cover the transaction type, which Dash Core
-	// hashes, so a tampered type has to be refused here, as do a stored height
-	// that is not the one the standby is valid from.
+	// The signature covers the type, so a retyped transaction fails the
+	// signature below; it is refused early with the other fields, as is a
+	// stored height that is not the one the standby is valid from.
 	if tx.Type != txTypeProDis || tx.MsgTx.Version != txVersion || tx.LockTime != 0 ||
 		len(tx.TxIn) != 1 || tx.TxIn[0].Sequence != finalSequence {
 		return nil, nil, badDis("not a dissolution transaction")
