@@ -15,7 +15,6 @@ import (
 
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
 
-	"github.com/bisoncraft/caribou/wallet/asset/dash/protx"
 	"github.com/bisoncraft/caribou/wallet/utxowallet/electrum"
 )
 
@@ -223,7 +222,7 @@ func (m *Manager) Refresh(ctx context.Context) error {
 		}
 		return out
 	}
-	found, err := m.refundHistory(ctx, held(), snap.OwnerKeyIDs, known, tip)
+	found, err := m.refundHistory(ctx, held(), known, tip)
 	if err != nil {
 		errs = append(errs, err)
 	}
@@ -300,29 +299,25 @@ func (m *Manager) Refresh(ctx context.Context) error {
 // of mns. A transaction that is not a dissolution is remembered, as what it
 // spends cannot change. Entries that are not mined, or are above the headers, are left for a
 // later Refresh. known are the transactions already stored.
-func (m *Manager) refundHistory(ctx context.Context, mns map[chainhash.Hash]*SharedMN, owned map[[protx.KeyIDSize]byte]uint32, known map[chainhash.Hash]struct{}, tip int32) ([]*candidate, error) {
+func (m *Manager) refundHistory(ctx context.Context, mns map[chainhash.Hash]*SharedMN, known map[chainhash.Hash]struct{}, tip int32) ([]*candidate, error) {
 	// A dissolution pays the refund script of every share but the actor's, and
-	// the actor's is paid or not as it chooses. So the history of the wallet's
-	// refund scripts has the dissolutions that pay it, and the history of the
-	// others', which is read less often, has the one that the wallet's share
-	// is the actor of and pays itself nothing.
+	// the actor's is paid or not as it chooses. So the history of the scripts
+	// of all the shares has every dissolution, including one that the wallet's
+	// share is the actor of and pays itself nothing.
 	scripts := make(map[string]struct{})
-	others := tip-m.othersAt >= othersEvery
+	if tip-m.refundAt < refundEvery {
+		return nil, nil
+	}
 	minHeight := int32(0)
 	for _, mn := range mns {
 		for i := range mn.Shares {
-			if _, ok := owned[mn.Shares[i].KeyIDOwner]; !ok && !others {
-				continue
-			}
 			scripts[scriptHash(mn.Shares[i].RefundScript)] = struct{}{}
 			if minHeight == 0 || mn.RegisteredHeight < minHeight {
 				minHeight = mn.RegisteredHeight
 			}
 		}
 	}
-	if others {
-		m.othersAt = tip
-	}
+	m.refundAt = tip
 	hashes := make([]string, 0, len(scripts))
 	for sh := range scripts {
 		hashes = append(hashes, sh)
@@ -338,7 +333,7 @@ func (m *Manager) refundHistory(ctx context.Context, mns map[chainhash.Hash]*Sha
 			// The others are still read: one script that a server will not
 			// give does not hide the rest.
 			errs = append(errs, fmt.Errorf("refund script history: %w", err))
-			m.othersAt = 0
+			m.refundAt = 0
 			continue
 		}
 		for _, e := range history {
@@ -363,19 +358,19 @@ func (m *Manager) refundHistory(ctx context.Context, mns map[chainhash.Hash]*Sha
 			rawHex, err := m.chain.GetRawTransaction(ctx, e.TxHash)
 			if err != nil {
 				errs = append(errs, fmt.Errorf("transaction %s: %w", e.TxHash, err))
-				m.othersAt = 0
+				m.refundAt = 0
 				continue
 			}
 			raw, err := hex.DecodeString(rawHex)
 			if err != nil {
 				errs = append(errs, fmt.Errorf("transaction %s: %w", e.TxHash, err))
-				m.othersAt = 0
+				m.refundAt = 0
 				continue
 			}
 			tx, err := decodeTx(raw)
 			if err != nil {
 				errs = append(errs, fmt.Errorf("transaction %s: %w", e.TxHash, err))
-				m.othersAt = 0
+				m.refundAt = 0
 				continue
 			}
 			// The proof is of the id, so the bytes must be the transaction with it.
@@ -495,9 +490,10 @@ const (
 	// askAgain is how many blocks pass before a server that did not know a
 	// transaction is asked again.
 	askAgain = 10
-	// othersEvery is how many blocks pass between reads of the refund scripts
-	// of the shares that are not the wallet's.
-	othersEvery = 10
+	// refundEvery is how many blocks pass between reads of the refund scripts.
+	// The wallet is told of a dissolution that pays its own share, which it
+	// subscribes to, so this is for one that does not, and for a restore.
+	refundEvery = 10
 	// idleLimit is how many Refreshes a tracked dissolution spends nothing the
 	// wallet holds before it is no longer tracked.
 	idleLimit = 144

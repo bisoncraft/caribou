@@ -113,9 +113,8 @@ type Manager struct {
 	// dissolution has spent nothing held. Both are guarded by syncMu.
 	asked map[chainhash.Hash]int32
 	idle  map[chainhash.Hash]int
-	// othersAt is the height the refund scripts of the shares that are not the
-	// wallet's were last read at.
-	othersAt int32
+	// refundAt is the height the refund scripts were last read at.
+	refundAt int32
 }
 
 // hint remembers the height a transaction was in, to try first.

@@ -778,3 +778,11 @@ func TestRegistrationThatSpendsACollateralIsNotADissolution(t *testing.T) {
 		t.Fatal("a registration was saved as a dissolution")
 	}
 }
+
+// later moves the chain on far enough that the refund scripts are read again.
+func (e *env) later() {
+	e.chain.mu.Lock()
+	defer e.chain.mu.Unlock()
+	e.chain.tip += refundEvery
+	e.chain.headers[e.chain.tip] = synthHeader(chainhash.Hash{byte(e.chain.tip)}, e.chain.tip)
+}

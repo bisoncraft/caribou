@@ -414,9 +414,10 @@ func TestRefreshFindsADissolutionInTheRefundHistory(t *testing.T) {
 		entry(heightB-1, e.hashD),     // before the registration
 		entry(heightA, e.a.ProTxHash), // a transaction that spends nothing of B's
 		electrum.HistoryEntry{Height: 0, TxHash: e.hashD.String()},
-		electrum.HistoryEntry{Height: tipHeight + 1, TxHash: e.hashD.String()},
+		electrum.HistoryEntry{Height: tipHeight + 100, TxHash: e.hashD.String()},
 	)
 	for range 3 {
+		e.later()
 		if err := m.Refresh(t.Context()); err != nil {
 			t.Fatal(err)
 		}
@@ -432,6 +433,7 @@ func TestRefreshFindsADissolutionInTheRefundHistory(t *testing.T) {
 	}
 
 	e.refundHistory(e.b, 0, entry(heightA, e.a.ProTxHash), entry(heightD, e.hashD))
+	e.later()
 	if err := m.Refresh(t.Context()); err != nil {
 		t.Fatal(err)
 	}
@@ -459,9 +461,9 @@ func TestRefreshFindsADissolutionInTheRefundHistory(t *testing.T) {
 	}
 }
 
-// A share the wallet does not own is not watched: its refund script is not the
-// wallet's, and may be anyone's.
-func TestRefreshWatchesOnlyTheWalletsShares(t *testing.T) {
+// The refund scripts of every share are read every refundEvery blocks, not on
+// every block.
+func TestRefreshReadsTheRefundScriptsNowAndThen(t *testing.T) {
 	e := newEnv(t)
 	e.own(map[uint32][20]byte{2: e.idB}, 0)
 	m := e.manager()
@@ -471,18 +473,19 @@ func TestRefreshWatchesOnlyTheWalletsShares(t *testing.T) {
 	if err := m.Refresh(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	owned := 0
-	for i := range e.b.Shares {
-		if _, ok := e.snapshot().OwnerKeyIDs[e.b.Shares[i].KeyIDOwner]; ok {
-			owned++
-		}
-	}
 	e.chain.histTotal = 0
 	if err := m.Refresh(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	if e.chain.histTotal != owned {
-		t.Fatalf("read %d histories for %d owned shares", e.chain.histTotal, owned)
+	if e.chain.histTotal != 0 {
+		t.Fatalf("read %d histories again at once", e.chain.histTotal)
+	}
+	e.later()
+	if err := m.Refresh(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if e.chain.histTotal != len(e.b.Shares) {
+		t.Fatalf("read %d histories for %d shares", e.chain.histTotal, len(e.b.Shares))
 	}
 }
 
@@ -766,6 +769,7 @@ func TestRefreshDoesNotForgetADissolutionOfALaterMasternode(t *testing.T) {
 	// after A's registration as a dissolution of A's would be.
 	delete(e.chain.blocks, e.b.ProTxHash.String())
 	e.refundHistory(e.a, 0, entry(heightA+1, e.hashD))
+	e.later()
 	if err := m.Refresh(t.Context()); err != nil {
 		t.Fatal(err)
 	}
@@ -774,6 +778,7 @@ func TestRefreshDoesNotForgetADissolutionOfALaterMasternode(t *testing.T) {
 	}
 
 	e.chain.blocks[e.b.ProTxHash.String()] = e.chain.headers[heightB].BlockHash().String()
+	e.later()
 	if err := m.Refresh(t.Context()); err != nil {
 		t.Fatal(err)
 	}
@@ -803,6 +808,7 @@ func TestRefreshRefusesBytesThatAreNotTheTransaction(t *testing.T) {
 	}
 	e.chain.raws[e.hashD.String()] = e.rawHex(&forged)
 	e.refundHistory(e.b, 0, entry(heightD, e.hashD))
+	e.later()
 	if err := m.Refresh(t.Context()); err == nil || !strings.Contains(err.Error(), "is served as") {
 		t.Fatalf("served bytes that are not the transaction: %v", err)
 	}
@@ -825,6 +831,7 @@ func TestRefundHistoryHeightProvesWithoutVerbose(t *testing.T) {
 	}
 	e.chain.verboseErr = errors.New("the server has no verbose transactions")
 	e.refundHistory(e.b, 0, entry(heightD, e.hashD))
+	e.later()
 	if err := m.Refresh(t.Context()); err != nil {
 		t.Fatalf("%v", err)
 	}
