@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -28,6 +29,7 @@ import (
 	"github.com/bisoncraft/caribou/wallet/asset/dash/protx"
 	"github.com/bisoncraft/caribou/wallet/utxowallet/bisonwire"
 	"github.com/bisoncraft/caribou/wallet/utxowallet/waddrmgr"
+	"github.com/bisoncraft/caribou/wallet/utxowallet/wallet"
 	"github.com/bisoncraft/caribou/wallet/utxowallet/wtxmgr"
 )
 
@@ -51,6 +53,25 @@ type fakeFunding struct {
 	// publishErr makes PublishBisonTx fail, as a backend that refuses a
 	// transaction.
 	publishErr error
+}
+
+// GetTransaction has what was published and not dropped.
+func (f *fakeFunding) GetTransaction(id chainhash.Hash) (*wallet.GetTransactionResult, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, tx := range f.published {
+		if tx.TxHash() == id {
+			return &wallet.GetTransactionResult{}, nil
+		}
+	}
+	return nil, wallet.ErrNoTx
+}
+
+// drop takes a published transaction out, as a wallet that dropped it.
+func (f *fakeFunding) drop(txid string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.published = slices.DeleteFunc(f.published, func(tx *bisonwire.Tx) bool { return tx.TxHash().String() == txid })
 }
 
 func newFakeFunding() *fakeFunding {
@@ -528,42 +549,14 @@ func TestMasternodeRegistrationFlow(t *testing.T) {
 	if _, err := r.dw.BroadcastMasternodeRegistration(ctx, o.ID, blobOf(t, other)); err == nil {
 		t.Fatal("broadcast of another registration")
 	}
-	// The wallet tells the manager of a registration it records, before it is
-	// sent. One the backend refuses is taken out of the wallet, and is no longer
-	// waited for.
-	mgr, err := r.dw.manager()
-	if err != nil {
-		t.Fatal(err)
-	}
-	finalRaw := rawOf(t, final)
-	tracked := func() int {
-		t.Helper()
-		snap, err := mgr.Store().Load()
-		if err != nil {
-			t.Fatal(err)
-		}
-		return len(snap.Tracked)
-	}
-	if err := mgr.Track(finalRaw, 0); err != nil {
-		t.Fatal(err)
-	}
 	r.fw.publishErr = errors.New("rejected")
 	if _, err := r.dw.BroadcastMasternodeRegistration(ctx, o.ID, finalBlob); err == nil {
 		t.Fatal("a refused registration was broadcast")
 	}
-	if tracked() != 0 {
-		t.Fatal("a registration the backend refused is still waited for")
-	}
 	r.fw.publishErr = nil
-	if err := mgr.Track(finalRaw, 0); err != nil {
-		t.Fatal(err)
-	}
 	txid, err := r.dw.BroadcastMasternodeRegistration(ctx, o.ID, finalBlob)
 	if err != nil {
 		t.Fatal(err)
-	}
-	if tracked() != 1 {
-		t.Fatal("a registration that was sent is not waited for")
 	}
 	// Sending it again, which fails, does not give it up: it may be mined.
 	r.fw.publishErr = errors.New("already known")
@@ -571,9 +564,6 @@ func TestMasternodeRegistrationFlow(t *testing.T) {
 		t.Fatal("a failed rebroadcast succeeded")
 	}
 	r.fw.publishErr = nil
-	if tracked() != 1 {
-		t.Fatal("a failed rebroadcast gave up a registration that was sent")
-	}
 	if len(r.fw.published) != 1 || r.fw.published[0].TxHash().String() != txid {
 		t.Fatalf("published %d, txid %s", len(r.fw.published), txid)
 	}
@@ -581,13 +571,18 @@ func TestMasternodeRegistrationFlow(t *testing.T) {
 	if list[0].State != "broadcast" || list[0].TxID != txid {
 		t.Fatalf("%+v", list)
 	}
-	// A broadcast offer that is never mined is not stuck: it can be cancelled,
-	// and its registration is no longer waited for.
-	if err := r.dw.CancelMasternodeOffer(ctx, o.ID); err != nil {
-		t.Fatalf("cancelling a broadcast offer that did not register: %v", err)
+	// A registration the wallet still has may mine, and its offer is what shows
+	// it until it does: it is not cancelled.
+	if err := r.dw.CancelMasternodeOffer(ctx, o.ID); err == nil {
+		t.Fatal("cancelled a broadcast offer whose registration the wallet still has")
 	}
-	if tracked() != 0 {
-		t.Fatal("a cancelled offer's registration is still waited for")
+	if list, _ := r.dw.MasternodeOffers(ctx); len(list) != 1 {
+		t.Fatalf("%+v", list)
+	}
+	// One the wallet no longer has was dropped, so the offer is not stuck.
+	r.fw.drop(txid)
+	if err := r.dw.CancelMasternodeOffer(ctx, o.ID); err != nil {
+		t.Fatalf("cancelling a broadcast offer that was dropped: %v", err)
 	}
 	if list, _ := r.dw.MasternodeOffers(ctx); len(list) != 0 || len(r.fw.leases) != 0 {
 		t.Fatalf("%+v, %d leases", list, len(r.fw.leases))

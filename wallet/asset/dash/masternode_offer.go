@@ -31,6 +31,7 @@ import (
 	"github.com/bisoncraft/caribou/wallet/asset/dash/protx"
 	"github.com/bisoncraft/caribou/wallet/utxowallet/bisonwire"
 	"github.com/bisoncraft/caribou/wallet/utxowallet/waddrmgr"
+	"github.com/bisoncraft/caribou/wallet/utxowallet/wallet"
 	"github.com/bisoncraft/caribou/wallet/utxowallet/wtxmgr"
 )
 
@@ -68,6 +69,9 @@ type fundingWallet interface {
 	PrivKeyForAddress(a btcutil.Address) (*btcec.PrivateKey, error)
 	PublishBisonTx(tx *bisonwire.Tx, label string) error
 	Locked() bool
+	// GetTransaction returns a transaction the wallet has, mined or not, and
+	// wallet.ErrNoTx for one it does not.
+	GetTransaction(txHash chainhash.Hash) (*wallet.GetTransactionResult, error)
 }
 
 // funding returns the wallet offers draw on.
@@ -404,22 +408,23 @@ func (dw *dashWallet) CancelMasternodeOffer(ctx context.Context, offerID string)
 	if ownersOf(mgr)[o.OwnerKeyID] {
 		return errors.New("the masternode is registered")
 	}
+	// A registration that was sent may be mined, or may mine, and the offer is
+	// what the wallet shows it by until it does. One the wallet no longer has
+	// was refused or dropped, and the offer can go: the track loop stops
+	// waiting for what the wallet no longer has.
+	if o.State == masternode.OfferBroadcast {
+		_, err := fw.GetTransaction(o.TxID)
+		switch {
+		case err == nil:
+			return fmt.Errorf("the registration %s was broadcast and the wallet still has it", o.TxID)
+		case !errors.Is(err, wallet.ErrNoTx):
+			return err
+		}
+	}
 	if err := releaseInputs(fw, o); err != nil {
 		return err
 	}
-	// A registration that was sent and is not mined is given up with its offer.
-	if o.TxID != (chainhash.Hash{}) {
-		dw.untrack(mgr, o.TxID)
-	}
 	return mgr.Store().DeleteOffer(id)
-}
-
-// untrack stops the Manager waiting for a registration the wallet gave up. A
-// failure to is only logged: it costs a request to the server for each Refresh.
-func (dw *dashWallet) untrack(mgr *masternode.Manager, id chainhash.Hash) {
-	if err := mgr.Untrack(id); err != nil {
-		dw.log.Warnf("Untracking the masternode registration %s: %v", id, err)
-	}
 }
 
 // usableOffer loads an offer that can still review and sign.
@@ -677,11 +682,8 @@ func (dw *dashWallet) BroadcastMasternodeRegistration(ctx context.Context, offer
 	}
 	if err := fw.PublishBisonTx(tx, registrationLabel); err != nil {
 		// The wallet records a transaction before it sends it, which tells the
-		// masternode tracking, and takes it out again when it is refused. A
-		// registration that was sent before, and may be mined, is kept.
-		if o.State == masternode.OfferSigned {
-			dw.untrack(mgr, tx.TxHash())
-		}
+		// masternode tracking, and takes it out again when it is refused, which
+		// the track loop sees: it stops waiting for what the wallet dropped.
 		return "", err
 	}
 	o.State, o.TxID = masternode.OfferBroadcast, tx.TxHash()
