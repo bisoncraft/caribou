@@ -20,6 +20,14 @@ ALPHA_RPC_PORT="20777"
 BETA_RPC_PORT="20778"
 WALLET_PASSWORD="abc"
 
+# Dash Core v24 gates shared masternodes (ProRegTx v3, types 10-12) behind
+# DEPLOYMENT_V24. On regtest it is EHF-signalled and never activates by
+# default (it needs a quorum). The last vbparams field is useEHF; 0 makes it
+# plain version-bits signalling, so mined blocks activate it (window 250,
+# threshold 200). Both nodes must use the same value. dashd v23 rejects the
+# unknown deployment: run `V24_VBPARAMS= ./harness.sh` to disable it.
+V24_VBPARAMS="${V24_VBPARAMS--vbparams=v24:0:9223372036854775807:0:250:200:150:5:0}"
+
 # These should be BIP39 mnemomic seed words representing the wallet's hdseed.
 # Using the hex hdseed directly does not seem to be possible.
 #
@@ -140,7 +148,7 @@ tmux send-keys -t $SESSION:0 "${DAEMON} -rpcuser=user -rpcpassword=pass \
   -whitelist=127.0.0.0/8 -whitelist=::1 \
   -peerblockfilters=1 -blockfilterindex=basic \
   -txindex=1 -regtest=1 -port=${ALPHA_LISTEN_PORT} -fallbackfee=0.00001 \
-  ${EXTRA_ARGS}; tmux wait-for -S alpha${SYMBOL}" C-m
+  ${V24_VBPARAMS} ${EXTRA_ARGS}; tmux wait-for -S alpha${SYMBOL}" C-m
 sleep 3
 
 ################################################################################
@@ -158,7 +166,7 @@ tmux send-keys -t $SESSION:1 "${DAEMON} -rpcuser=user -rpcpassword=pass \
   -whitelist=127.0.0.0/8 -whitelist=::1 \
   -peerblockfilters=1 -blockfilterindex=basic \
   -txindex=1 -regtest=1 -port=${BETA_LISTEN_PORT} -fallbackfee=0.00001 \
-  ${EXTRA_ARGS}; tmux wait-for -S beta${SYMBOL}" C-m
+  ${V24_VBPARAMS} ${EXTRA_ARGS}; tmux wait-for -S beta${SYMBOL}" C-m
 sleep 3
 
 ################################################################################
@@ -381,6 +389,16 @@ done
 echo "Generating 290 blocks for alpha to pass DIP-3 enforcement"
 
 tmux send-keys -t $SESSION:2 "./alpha generatetoaddress 290 ${ALPHA_MINING_ADDR}${DONE}" C-m\; ${WAIT}
+sleep 1
+
+################################################################################
+# Mine past V24 activation (window 250: STARTED at 250, LOCKED_IN at 500,
+# ACTIVE at 750) so shared masternode transactions are valid. A no-op on v23,
+# where V24_VBPARAMS is empty, other than the extra blocks.
+################################################################################
+echo "Generating 260 blocks for alpha to pass V24 activation"
+
+tmux send-keys -t $SESSION:2 "./alpha generatetoaddress 260 ${ALPHA_MINING_ADDR}${DONE}" C-m\; ${WAIT}
 sleep 1
 
 ################################################################################

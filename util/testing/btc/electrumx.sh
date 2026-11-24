@@ -53,18 +53,20 @@ git reset --hard FETCH_HEAD
 sed -i 's/self.polling_delay = 5/self.polling_delay = 1/' electrumx/server/block_processor.py
 sed -i 's/refresh_secs=5.0/refresh_secs=1.0/' electrumx/server/mempool.py
 
-# Dash Core 20+ serializes the coinbase special transaction (cbTx) at version 3,
-# appending bestCLHeightDiff/bestCLSignature/creditPoolBalance. This electrumx's
-# DashCbTx handler only parses cbTx v1/v2, so on a v3 coinbase it under-reads the
-# payload and `assert self.cursor == end` aborts the block processor, taking the
-# whole server down on every block past the activation height. spesmilo dropped
-# Dash upstream, so there is no newer release to move to. Trust the serialized
-# extra-payload length instead of asserting exact consumption: seek to the
-# declared end, which stays forward-compatible with any future special-tx
-# version (electrumx indexes by input/output scripts and does not need the
-# special-tx payload).
+# Dash Core 20+ and 24 use payload layouts this electrumx cannot parse. The cbTx
+# is at version 3, which its DashCbTx handler (v1/v2 only) under-reads, so
+# `assert self.cursor == end` aborts the block processor on every block past the
+# activation height. ProRegTx and the other typed payloads are decoded with
+# their v2 layout whatever the payload's own version, a v2 ProUpServTx has an
+# nType its v1 handler does not read, and types 10 to 12 (ProDisTx,
+# ProUpShareTx, ProUpSharedRegTx) collide with obsolete DIP-5 handlers.
+# electrumx never uses a special transaction's payload (it indexes by input and
+# output scripts, and passes protx.info/protx.diff to dashd), so read every
+# payload as raw bytes: the length is in the transaction, so it stays correct
+# for any version or type. spesmilo dropped Dash upstream, so there is no newer
+# release to move to.
 if [ "${COIN}" = "Dash" ]; then
-    sed -i 's/assert self.cursor == end/self.cursor = end/' electrumx/lib/tx_dash.py
+    sed -i 's/if spec_tx_class:/if False:/' electrumx/lib/tx_dash.py
 fi
 
 if [ ! -d "${ELECTRUMX_DIR}/venv" ]; then
