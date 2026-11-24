@@ -49,6 +49,8 @@ type fakeChain struct {
 	refund map[string][]electrum.HistoryEntry
 	// sharedErr is returned for the history of the shared collateral script.
 	sharedErr error
+	// refundErr is returned for the history of a refund scripthash.
+	refundErr map[string]error
 	// verboseErr is returned for a verbose transaction.
 	verboseErr error
 	info       *electrum.ProTxInfo
@@ -87,6 +89,9 @@ func (f *fakeChain) GetHistory(_ context.Context, sh string) ([]electrum.History
 	defer f.mu.Unlock()
 	f.histTotal++
 	if sh != sharedCollateralScripthash {
+		if err := f.refundErr[sh]; err != nil {
+			return nil, err
+		}
 		return slices.Clone(f.refund[sh]), nil
 	}
 	f.histCalls++
@@ -693,9 +698,9 @@ func TestSharedMN(t *testing.T) {
 		if !errors.Is(err, ErrInfoMismatch) {
 			t.Fatalf("%v", err)
 		}
-		// One Refresh reads the history of A's one owned refund script, and
-		// never the shared script's.
-		if e.chain.infoCalls != 2 || e.chain.histTotal != 1 || e.chain.histCalls != 0 {
+		// One Refresh reads the history of the refund script of each of A's
+		// shares, the wallet's and the others', and never the shared script's.
+		if e.chain.infoCalls != 2 || e.chain.histTotal != len(e.a.Shares) || e.chain.histCalls != 0 {
 			t.Fatalf("%d info calls, %d history calls, %d of the shared script", e.chain.infoCalls, e.chain.histTotal, e.chain.histCalls)
 		}
 	})
@@ -753,9 +758,9 @@ func TestManagerConcurrent(t *testing.T) {
 	wg.Wait()
 }
 
-// A transaction that spends a collateral dissolves it whatever its type, so a
-// registration that spends another's collateral does too.
-func TestRegistrationThatSpendsACollateralDissolvesIt(t *testing.T) {
+// Only a dissolution can spend a shared collateral, by consensus, so a
+// registration that does is not one, and is not taken for what dissolves it.
+func TestRegistrationThatSpendsACollateralIsNotADissolution(t *testing.T) {
 	e := newEnv(t)
 	e.own(map[uint32][20]byte{1: e.idA, 2: e.idB}, 0)
 	e.setHistory(entry(heightA, e.a.ProTxHash))
@@ -766,10 +771,10 @@ func TestRegistrationThatSpendsACollateralDissolvesIt(t *testing.T) {
 	if err := m.Discover(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := m.SharedMN(t.Context(), e.a.ProTxHash, false); !errors.Is(err, ErrDissolved) {
+	if _, err := m.SharedMN(t.Context(), e.a.ProTxHash, false); err != nil {
 		t.Fatalf("A: %v", err)
 	}
-	if _, ok := e.snapshot().Dissolutions[e.a.ProTxHash]; !ok {
-		t.Fatal("the spend was not saved")
+	if _, ok := e.snapshot().Dissolutions[e.a.ProTxHash]; ok {
+		t.Fatal("a registration was saved as a dissolution")
 	}
 }

@@ -108,6 +108,21 @@ type Manager struct {
 	// not read them again: what a transaction spends never changes. It is
 	// guarded by syncMu and is lost on a restart.
 	seen map[chainhash.Hash]struct{}
+	// asked is the height a tracked transaction was last asked the server for,
+	// which did not know it, and idle counts the Refreshes a tracked
+	// dissolution has spent nothing held. Both are guarded by syncMu.
+	asked map[chainhash.Hash]int32
+	idle  map[chainhash.Hash]int
+	// othersAt is the height the refund scripts of the shares that are not the
+	// wallet's were last read at.
+	othersAt int32
+}
+
+// hint remembers the height a transaction was in, to try first.
+func (m *Manager) hint(id chainhash.Hash, height int32) {
+	m.mu.Lock()
+	m.hints[id] = height
+	m.mu.Unlock()
 }
 
 // NewManager loads the stored state. It makes no network calls.
@@ -115,6 +130,7 @@ func NewManager(chain Chain, store *Store, keys KeyDeriver, coinType uint32, net
 	m := &Manager{
 		chain: chain, store: store, keys: keys, coinType: coinType, net: net,
 		hints: make(map[chainhash.Hash]int32), seen: make(map[chainhash.Hash]struct{}),
+		asked: make(map[chainhash.Hash]int32), idle: make(map[chainhash.Hash]int),
 	}
 	snap, err := store.Load()
 	if err != nil {
@@ -234,10 +250,12 @@ func (m *Manager) reconcile(snap Snapshot, stored map[chainhash.Hash]*SharedMN, 
 	for h, mn := range stored {
 		r := snap.Registrations[h]
 		if !m.unchanged(r.Height, r.Block) {
+			m.hint(h, r.Height)
 			up.Drop = append(up.Drop, h)
 			up.Track = append(up.Track, r.Tx)
 			// Its spend goes with it, and is proven again with it.
 			if sp, ok := snap.Dissolutions[h]; ok && len(sp.Tx) > 0 {
+				m.hint(sp.TxID, sp.Height)
 				up.Track = append(up.Track, sp.Tx)
 			}
 			continue
@@ -246,6 +264,7 @@ func (m *Manager) reconcile(snap Snapshot, stored map[chainhash.Hash]*SharedMN, 
 		known[h] = struct{}{}
 		if sp, ok := snap.Dissolutions[h]; ok {
 			if !m.unchanged(sp.Height, sp.Block) {
+				m.hint(sp.TxID, sp.Height)
 				up.DropDissolutions = append(up.DropDissolutions, h)
 				if len(sp.Tx) > 0 {
 					up.Track = append(up.Track, sp.Tx)
@@ -376,9 +395,12 @@ func (m *Manager) Discover(ctx context.Context) error {
 		up.Registrations = append(up.Registrations, Registration{Height: c.height, Block: block, Tx: c.raw})
 		live[c.txid] = c.mn
 	}
-	// Any transaction that spends a collateral dissolves it, whatever its
-	// type, so a registration is checked too.
+	// Only a dissolution can spend a shared collateral, by consensus, and Save
+	// refuses any other type.
 	for _, c := range cands {
+		if c.tx.Type != txTypeProDis {
+			continue
+		}
 		for h, mn := range live {
 			if !mn.SpendsCollateral(c.tx) {
 				continue

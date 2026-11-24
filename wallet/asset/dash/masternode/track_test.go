@@ -267,13 +267,16 @@ func TestTrackOfAKnownTransactionIsUntracked(t *testing.T) {
 	}
 }
 
-// A block below the headers the chain holds cannot be proven, which the server
-// says by its confirmations: it is reported once, with whatever else went
-// wrong, and not waited for.
+// A block below the headers the chain holds cannot be proven, which a height
+// the wallet gave says: it is reported once, with whatever else went wrong, and
+// not waited for.
 func TestTrackBelowTheHeadersIsReported(t *testing.T) {
 	e, m := trackedEnv(t)
 	e.chain.start = heightA + 1
 	delete(e.chain.headers, heightA)
+	if err := m.Track(rawTx(t, e.txA), heightA); err != nil {
+		t.Fatal(err)
+	}
 
 	// Another transaction fails for its own reason in the same Refresh.
 	if err := m.Track(rawTx(t, e.txB), 0); err != nil {
@@ -299,22 +302,61 @@ func TestTrackBelowTheHeadersIsReported(t *testing.T) {
 	}
 }
 
-// A height from the caller that is below the headers is not believed: the
-// server is asked, and the proof decides, so a wrong one does not lose the
-// registration.
-func TestTrackLowHintIsOnlyAHint(t *testing.T) {
+// A server's word that a block is deep does not give a registration up: a
+// wallet whose headers are behind the server's has no header for it yet, and
+// proves it when they catch up.
+func TestTrackIsNotGivenUpOnTheServersWord(t *testing.T) {
 	e := newEnv(t)
 	e.own(map[uint32][20]byte{1: e.idA}, 0)
-	e.chain.start = heightA - 10
+	e.chain.start = heightA - 50
+	hdr := e.chain.headers[heightA]
+	delete(e.chain.headers, heightA)
+	e.chain.tip = heightA - 5
+	delete(e.chain.headers, tipHeight)
+	e.chain.headers[e.chain.tip] = synthHeader(chainhash.Hash{1}, e.chain.tip)
+	e.chain.confs[e.a.ProTxHash.String()] = 500 // by the server's tip, not the wallet's
 	m := e.manager()
-	if err := m.Track(rawTx(t, e.txA), heightA-100); err != nil {
+	if err := m.Track(rawTx(t, e.txA), 0); err != nil {
 		t.Fatal(err)
 	}
 	if err := m.Refresh(t.Context()); err != nil {
-		t.Fatal(err)
+		t.Fatalf("%v", err)
 	}
-	if m.StakedAmount() != e.a.Shares[0].Amount || len(e.snapshot().Tracked) != 0 {
-		t.Fatalf("a low hint lost the registration: staked %d", m.StakedAmount())
+	if len(e.snapshot().Tracked) != 1 {
+		t.Fatal("the registration was given up on the server's word")
+	}
+
+	// The headers catch up.
+	e.chain.headers[heightA] = hdr
+	e.chain.tip = tipHeight
+	e.chain.headers[tipHeight] = synthHeader(chainhash.Hash{2}, tipHeight)
+	if err := m.Refresh(t.Context()); err != nil {
+		t.Fatalf("%v", err)
+	}
+	if m.StakedAmount() != e.a.Shares[0].Amount {
+		t.Fatalf("not proven once the headers caught up: staked %d", m.StakedAmount())
+	}
+}
+
+// A transaction the server does not know, one that was dropped or double
+// spent, is not an error on every block, and is asked for only now and then.
+func TestTrackOfAnUnknownTransactionIsQuiet(t *testing.T) {
+	e, m := trackedEnv(t)
+	e.chain.verboseErr = electrum.RPCError{Code: -5, Message: "No such mempool or blockchain transaction"}
+	for range 3 {
+		if err := m.Refresh(t.Context()); err != nil {
+			t.Fatalf("%v", err)
+		}
+	}
+	if e.chain.verboseCalls != 1 {
+		t.Fatalf("asked %d times", e.chain.verboseCalls)
+	}
+	// A failure that is not that is still an error.
+	e.chain.verboseErr = errors.New("connection reset")
+	e.chain.tip += askAgain
+	e.chain.headers[e.chain.tip] = synthHeader(chainhash.Hash{3}, e.chain.tip)
+	if err := m.Refresh(t.Context()); err == nil {
+		t.Fatal("a connection failure was taken for an unknown transaction")
 	}
 }
 
@@ -766,5 +808,94 @@ func TestRefreshRefusesBytesThatAreNotTheTransaction(t *testing.T) {
 	}
 	if m.StakedAmount() == 0 {
 		t.Fatal("dissolved by a forgery")
+	}
+}
+
+// A dissolution found in a refund script's history is proven by the height the
+// history gave, so a server that has no verbose transactions still gets it.
+func TestRefundHistoryHeightProvesWithoutVerbose(t *testing.T) {
+	e := newEnv(t)
+	e.own(map[uint32][20]byte{2: e.idB}, 0)
+	m := e.manager()
+	if err := m.Track(rawTx(t, e.txB), 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Refresh(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	e.chain.verboseErr = errors.New("the server has no verbose transactions")
+	e.refundHistory(e.b, 0, entry(heightD, e.hashD))
+	if err := m.Refresh(t.Context()); err != nil {
+		t.Fatalf("%v", err)
+	}
+	if _, err := m.SharedMN(t.Context(), e.b.ProTxHash, false); !errors.Is(err, ErrDissolved) {
+		t.Fatalf("%v", err)
+	}
+}
+
+// A dissolution that pays nothing to the wallet's share, whose actor it is, is
+// in the history of the other shares' refund scripts, which are read now and
+// then.
+func TestDissolutionIsFoundInTheOtherSharesHistory(t *testing.T) {
+	e := newEnv(t)
+	e.own(map[uint32][20]byte{2: e.idB}, 0)
+	if len(e.b.Shares) < 2 {
+		t.Skip("the masternode has one share")
+	}
+	m := e.manager()
+	if err := m.Track(rawTx(t, e.txB), 0); err != nil {
+		t.Fatal(err)
+	}
+	// Not in the history of the wallet's share, only of another's.
+	e.refundHistory(e.b, len(e.b.Shares)-1, entry(heightD, e.hashD))
+	if err := m.Refresh(t.Context()); err != nil {
+		t.Fatalf("%v", err)
+	}
+	if _, err := m.SharedMN(t.Context(), e.b.ProTxHash, false); !errors.Is(err, ErrDissolved) {
+		t.Fatalf("%v", err)
+	}
+}
+
+// One refund script that the server will not give does not hide the others'.
+func TestOneRefundHistoryFailureDoesNotHideTheRest(t *testing.T) {
+	e := newEnv(t)
+	e.own(map[uint32][20]byte{2: e.idB}, 0)
+	if len(e.b.Shares) < 2 {
+		t.Skip("the masternode has one share")
+	}
+	m := e.manager()
+	if err := m.Track(rawTx(t, e.txB), 0); err != nil {
+		t.Fatal(err)
+	}
+	e.chain.refundErr = map[string]error{scriptHash(e.b.Shares[0].RefundScript): errors.New("history too large")}
+	e.refundHistory(e.b, len(e.b.Shares)-1, entry(heightD, e.hashD))
+	err := m.Refresh(t.Context())
+	if err == nil || !strings.Contains(err.Error(), "history too large") {
+		t.Fatalf("the failure is hidden: %v", err)
+	}
+	if _, err := m.SharedMN(t.Context(), e.b.ProTxHash, false); !errors.Is(err, ErrDissolved) {
+		t.Fatalf("a failed script hid the others: %v", err)
+	}
+}
+
+// A tracked dissolution that spends nothing the wallet holds is not waited for
+// forever.
+func TestIdleTrackedDissolutionIsUntracked(t *testing.T) {
+	e := newEnv(t)
+	e.own(map[uint32][20]byte{1: e.idA}, 0)
+	m := e.manager()
+	// D dissolves B, which the wallet does not hold.
+	if err := m.Track(rawTx(t, e.txD), 0); err != nil {
+		t.Fatal(err)
+	}
+	for range idleLimit {
+		_ = m.Refresh(t.Context())
+	}
+	if len(e.snapshot().Tracked) != 1 {
+		t.Fatal("untracked early")
+	}
+	_ = m.Refresh(t.Context())
+	if len(e.snapshot().Tracked) != 0 {
+		t.Fatal("an idle dissolution is still tracked")
 	}
 }

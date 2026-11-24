@@ -31,9 +31,10 @@ var (
 	trackedBucket = []byte("tracked")
 )
 
-// storeVersion is the layout of the store. A record format or bucket change
-// raises it, so a store written by another layout is refused and not read as
-// this one.
+// storeVersion is the layout of the store. Once a store has shipped, a record
+// format or bucket change raises it, so a store written by another layout is
+// refused and not read as this one. None has shipped, so the buckets and records
+// added while this is under review are part of version 1.
 const storeVersion = 1
 
 // legacyVersion is the layout of a store with no version recorded: the only
