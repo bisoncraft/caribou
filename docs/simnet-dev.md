@@ -130,17 +130,46 @@ test-token contracts. The deployed addresses are written next to the data
 directory; ERC20 helpers (`sendTokens`, `tokenBalance`, …) are added to the
 attach console.
 
+### Zcash wallets
+
+The ZEC harness (`util/testing/zec`) runs two Zebra regtest nodes, **alpha**
+and **beta**, with every network upgrade through NU7 active from height 1.
+Zebra has no wallet, so the two funders are zcash-devtool light wallets that
+sync through the lightwalletd-protocol gRPC server built into each node,
+the same interface the Caribou wallet uses. Each funder starts with about 312
+ZEC in the Ironwood pool. `zebrad`, `zcash-devtool`, `tmux`, `curl`, `jq`,
+`awk` and `watch` must be in `PATH`; `util/testing/zec/README.md` gives the
+tested versions and how to install them.
+
+A fourth tmux window mines a block on alpha every 15 seconds.
+`export NOMINER=1` before `./harness.sh` leaves it out, for tests that count
+blocks.
+
+```bash
+./send-alpha <address> 0.5 "a memo"   # pay any address from the alpha funder
+./mine-alpha 10                       # mine 10 blocks on alpha
+./mine-to <address> 1                 # mine a block whose coinbase pays <address>
+./balance-alpha                       # the funder's balances, per pool
+./reorg 2                             # replace the last 2 blocks with 3
+./quit
+```
+
+A received shielded output is spendable at 10 confirmations and the change of
+the wallet's own transactions at 3; a transparent output is spendable once it
+is mined. Mining 10 blocks after funding a wallet covers every case.
+
 ## Network/port conventions
 
 Each harness pins its own port set so the families can coexist. Selected
 examples:
 
-| Chain | Alpha RPC                                | Beta RPC | Notes                                                |
-|-------|------------------------------------------|----------|------------------------------------------------------|
-| btc   | 20556                                    | 20557    | regtest, RPC user/pass `user`/`pass`                 |
-| ltc   | 20566                                    | 20567    | follows btc-style but offset; check `ltc/harness.sh` |
-| eth   | 38556 (HTTP), 38557 (WS), 8552 (authrpc) | —        | --dev mode, single node                              |
-| base  | 39556 (HTTP), 39557 (WS), 8652 (authrpc) | —        | eth-derived                                          |
+| Chain | Alpha RPC                                | Beta RPC     | Notes                                                |
+|-------|------------------------------------------|--------------|------------------------------------------------------|
+| btc   | 20556                                    | 20557        | regtest, RPC user/pass `user`/`pass`                 |
+| ltc   | 20566                                    | 20567        | follows btc-style but offset; check `ltc/harness.sh` |
+| eth   | 38556 (HTTP), 38557 (WS), 8552 (authrpc) | —            | --dev mode, single node                              |
+| base  | 39556 (HTTP), 39557 (WS), 8652 (authrpc) | —            | eth-derived                                          |
+| zec   | 22768 (JSON-RPC), 22770 (gRPC)           | 22769, 22771 | P2P 22764/22765; gRPC is the light-client server     |
 
 The authoritative ports are the `*_PORT` exports at the top of each
 `harness.sh`. Read them before assuming.
@@ -162,6 +191,11 @@ Each asset package's (`wallet/asset/<asset>`) simnet config points at the harnes
   `chaincfg.RegressionNetParams` and the alpha node.
 - **ETH-family**: the wallet connects to `127.0.0.1:<ALPHA_HTTP_PORT>` (or WS
   for subscriptions).
+- **ZEC**: under `--simnet` the wallet's default server is alpha's
+  light-client gRPC server, `127.0.0.1:22770`, without TLS, on a regtest
+  network with every upgrade at height 1. A new simnet wallet's birthday is
+  height 2. The `lightwalletdserver` setting points it at another server,
+  such as beta's `127.0.0.1:22771`.
 
 The internal client uses the same default credentials as the harness
 (`user`/`pass` for BTC, no-password JSON-RPC for ETH dev mode), so a freshly
@@ -187,6 +221,25 @@ go test -tags harness -count=1 -v ./wallet/asset/btc/...
 
 # Run ETH harness tests
 go test -tags harness -count=1 -v ./wallet/asset/eth/...
+```
+
+The Zcash wallet needs the `zec` tag as well, and its Rust library built
+first (`wallet/asset/zec/zeclib/README.md`, Building). The harness tests
+mine blocks and reorganize the chain; they are run against a harness started
+with `NOMINER=1`, one package at a time. The two packages both spend from the
+alpha funder, mine and reorganize, and `go test` runs packages in parallel;
+`NOMINER=1` stops only the harness's own miner, not the tests' mining.
+
+```bash
+(cd wallet/asset/zec/zeclib && ./build.sh)
+go test -tags zec,harness -count=1 -v ./wallet/asset/zec/zeclib
+go test -tags zec,harness -count=1 -v ./wallet/asset/zec
+```
+
+A Caribou binary with Zcash is built with `-tags zec`:
+
+```bash
+go build -tags zec -o caribou ./wallet/cmd/caribou
 ```
 
 ## Debugging the harness

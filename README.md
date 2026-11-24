@@ -230,6 +230,17 @@ covers obtaining or building them. With the libraries in place:
 go build -tags xmr -o caribou-desktop ./wallet/cmd/caribou-desktop
 ```
 
+The `zec` tag adds Zcash. It links the Rust library behind the Zcash wallet
+statically, so the library has to be built first with `build.sh` in
+`wallet/asset/zec/zeclib`, which needs a Rust toolchain and uniffi-bindgen-go;
+[wallet/asset/zec/zeclib/README.md](wallet/asset/zec/zeclib/README.md#building)
+covers the requirements. The tag requires cgo, and a build with it fails
+without cgo. Only Linux is supported so far. Tags combine:
+
+```bash
+go build -tags xmr,zec -o caribou-desktop ./wallet/cmd/caribou-desktop
+```
+
 ### Command-line wallet
 
 `caribou` runs the wallet as a local server and serves the UI to a browser.
