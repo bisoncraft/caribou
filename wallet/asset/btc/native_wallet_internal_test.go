@@ -6,9 +6,11 @@
 package btc
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"math"
+	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -16,8 +18,16 @@ import (
 
 	"github.com/bisoncraft/caribou/util"
 	"github.com/bisoncraft/caribou/wallet/asset"
+	"github.com/bisoncraft/caribou/wallet/txdb"
+	"github.com/bisoncraft/caribou/wallet/utxowallet/waddrmgr"
 	"github.com/bisoncraft/caribou/wallet/utxowallet/wallet"
+	"github.com/bisoncraft/caribou/wallet/utxowallet/walletdb"
+	"github.com/bisoncraft/caribou/wallet/utxowallet/wtxmgr"
+	"github.com/btcsuite/btcd/btcutil/hdkeychain"
 	"github.com/btcsuite/btcd/chaincfg"
+	"github.com/btcsuite/btcd/chaincfg/chainhash"
+	"github.com/btcsuite/btcd/txscript"
+	"github.com/btcsuite/btcd/wire"
 )
 
 func TestNativeWalletSettingsAndPeerConversion(t *testing.T) {
@@ -112,89 +122,236 @@ func TestScanFloor(t *testing.T) {
 	w := &NativeWallet{}
 
 	// No floor armed: the cursor passes through.
-	if got, floor := w.peekScanFloor(100); got != 100 || floor != 0 {
-		t.Fatalf("no-floor peek = (%d, %d), want (100, 0)", got, floor)
+	if from, floor := w.takeScanFloor(100); from != 100 || floor != 0 {
+		t.Fatalf("no-floor take = (%d, %d), want (100, 0)", from, floor)
 	}
 
-	// Arming keeps the minimum.
+	// Arming keeps the minimum, and a height of 0 names no block.
 	w.armScanFloor(90)
 	w.armScanFloor(95) // higher: ignored
 	w.armScanFloor(85) // lower: replaces
-	got, floor := w.peekScanFloor(100)
-	if got != 85 || floor != 85 {
-		t.Fatalf("armed peek = (%d, %d), want (85, 85)", got, floor)
+	w.armScanFloor(0)  // ignored
+	from, floor := w.takeScanFloor(100)
+	if from != 85 || floor != 85 {
+		t.Fatalf("armed take = (%d, %d), want (85, 85)", from, floor)
 	}
-	// Peeking does not consume: the scan has not run yet.
-	if got, _ := w.peekScanFloor(100); got != 85 {
-		t.Fatalf("second peek = %d, want 85; peek must not consume", got)
-	}
-	// Retired once the scan that used it completed.
-	w.clearScanFloor(floor)
-	if got, _ := w.peekScanFloor(100); got != 100 {
-		t.Fatalf("post-clear peek = %d, want 100", got)
+	// Taking empties the register, so a height armed from here on is left
+	// for the next scan.
+	if armed := w.scanFloor.Load(); armed != 0 {
+		t.Fatalf("floor still armed at %d after a scan claimed it", armed)
 	}
 
-	// A floor above the cursor never raises it, but a scan from the cursor
-	// covers those blocks, so it is still retired.
+	// A floor above the cursor never raises the start height.
 	w.armScanFloor(150)
-	got, floor = w.peekScanFloor(100)
-	if got != 100 || floor != 150 {
-		t.Fatalf("higher-floor peek = (%d, %d), want (100, 150)", got, floor)
-	}
-	w.clearScanFloor(floor)
-	if armed := w.scanFloor.Load(); armed != 0 {
-		t.Fatalf("floor still armed at %d after a scan that covered it", armed)
+	if from, floor := w.takeScanFloor(100); from != 100 || floor != 150 {
+		t.Fatalf("higher-floor take = (%d, %d), want (100, 150)", from, floor)
 	}
 
 	// A never-scanned wallet (cursor 0) already scans from the beginning; the
 	// floor must not turn that into a partial scan.
 	w.armScanFloor(85)
-	if got, _ := w.peekScanFloor(0); got != 0 {
-		t.Fatalf("initial-scan peek = %d, want 0", got)
+	if from, _ := w.takeScanFloor(0); from != 0 {
+		t.Fatalf("initial-scan take = %d, want 0", from)
 	}
 }
 
-// TestScanFloorSurvivesFailedScan covers the paths where the scan the floor was
-// peeked for never reaches the blocks it names. scanNewTransactions used to
-// consume the register up front, so a ListSinceBlock error - or a context
-// cancellation partway through - returned with the cursor still at its higher
-// value and the override gone. Nothing rescans below the cursor after that, so
-// the late-notified mined transaction the floor was armed for is dropped from tx
-// history for the life of the process.
-//
-// Driven through the register rather than through scanNewTransactions: btcw is a
-// concrete *wallet.Wallet, so ListSinceBlock cannot be made to fail without an
-// interface seam that exists for nothing else.
-func TestScanFloorSurvivesFailedScan(t *testing.T) {
-	w := &NativeWallet{}
+// snapshotHookDB runs afterView each time a read transaction on the wallet
+// database completes. With the wallet not started, a history scan's only read
+// of that database is its ListSinceBlock snapshot, so the hook runs right
+// after the scan takes its snapshot and before it records anything or
+// advances its cursor.
+type snapshotHookDB struct {
+	walletdb.DB
+	afterView func()
+}
 
-	// A late-notified tx in block 85 arms the floor under a cursor at 100.
-	w.armScanFloor(85)
-	from, floor := w.peekScanFloor(100)
-	if from != 85 {
-		t.Fatalf("scan start = %d, want 85", from)
+func (d *snapshotHookDB) View(f func(walletdb.ReadTx) error, reset func()) error {
+	err := d.DB.View(f, reset)
+	if d.afterView != nil {
+		d.afterView()
 	}
+	return err
+}
 
-	// The scan fails, so clearScanFloor is never reached. The next one must
-	// still reach block 85.
-	if from, _ := w.peekScanFloor(100); from != 85 {
-		t.Fatalf("scan start after a failed scan = %d, want 85", from)
+// newScanFloorWallet returns an offline wallet, opened over a snapshotHookDB
+// and not started, whose history scans run directly against its own
+// transaction store, with the scan cursor at cursor.
+func newScanFloorWallet(t *testing.T, cursor uint64) (*NativeWallet, *snapshotHookDB) {
+	t.Helper()
+	cc := btcElectrumChainConfig(&chaincfg.RegressionNetParams)
+	dir := t.TempDir()
+	seed, err := hdkeychain.GenerateSeed(hdkeychain.RecommendedSeedLen)
+	if err != nil {
+		t.Fatal(err)
 	}
-
-	// The retry succeeds and retires the floor.
-	w.clearScanFloor(floor)
-	if from, _ := w.peekScanFloor(100); from != 100 {
-		t.Fatalf("scan start after a completed scan = %d, want 100", from)
+	if err := CreateElectrumWallet(cc, []byte("pass"), seed, time.Now(), dir, tLogger, 0, 0, wallet.WithScryptOptions(&waddrmgr.FastScryptOptions)); err != nil {
+		t.Fatal(err)
 	}
+	bdb, err := walletdb.Open("bdb", filepath.Join(dir, wallet.WalletDBName), true, dbTimeout)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { bdb.Close() })
+	db := &snapshotHookDB{DB: bdb}
+	btcw, err := wallet.Open(db, []byte(wallet.InsecurePubPassphrase), cc.NetParams, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	master, err := txdb.New(filepath.Join(t.TempDir(), "tx.db"), tLogger)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { master.Close() })
+	w := NewNativeWallet(cc, &asset.WalletConfig{}, tLogger)
+	w.btcw = btcw
+	w.txdb = master.NetworkTxDB(BipID)
+	w.emit = asset.NewWalletEmitter(make(chan asset.WalletNotification, 64), BipID, tLogger)
+	w.receiveTxLastQuery.Store(cursor)
+	return w, db
+}
 
-	// A floor armed while a scan is running names blocks below where that scan
-	// started, so completing it must not retire the newer, lower value.
-	w.armScanFloor(85)
-	_, floor = w.peekScanFloor(100)
-	w.armScanFloor(70) // a second late notification, mid-scan
-	w.clearScanFloor(floor)
-	if from, _ := w.peekScanFloor(100); from != 70 {
-		t.Fatalf("scan start = %d, want 70; a floor armed mid-scan was retired by it", from)
+// storeMinedCredit stores a transaction mined at height that pays the wallet
+// one output, as the chain backend's relevant-transaction notification does,
+// and returns its txid. Each seed gives a distinct transaction.
+func storeMinedCredit(t *testing.T, w *NativeWallet, seed byte, height int32) string {
+	t.Helper()
+	msgTx := wire.NewMsgTx(2)
+	msgTx.AddTxIn(&wire.TxIn{PreviousOutPoint: wire.OutPoint{Hash: chainhash.Hash{seed}}})
+	pkScript := append([]byte{txscript.OP_0, txscript.OP_DATA_20}, bytes.Repeat([]byte{seed}, 20)...)
+	msgTx.AddTxOut(&wire.TxOut{Value: 100_000, PkScript: pkScript})
+	rec, err := wtxmgr.NewTxRecordFromMsgTx("btc", msgTx, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	block := &wtxmgr.BlockMeta{
+		Block: wtxmgr.Block{Hash: chainhash.Hash{byte(height), byte(height >> 8), 0xb1}, Height: height},
+		Time:  time.Now(),
+	}
+	err = walletdb.Update(w.btcw.Database(), func(dbtx walletdb.ReadWriteTx) error {
+		ns := dbtx.ReadWriteBucket([]byte("wtxmgr"))
+		if err := w.btcw.TxStore.InsertTx(ns, rec, block); err != nil {
+			return err
+		}
+		return w.btcw.TxStore.AddCredit(ns, rec, block, 0, false)
+	})
+	if err != nil {
+		t.Fatalf("storing transaction mined at %d: %v", height, err)
+	}
+	return rec.Hash.String()
+}
+
+// recorded reports whether the wallet's transaction history holds txid.
+func recorded(w *NativeWallet, txid string) bool {
+	wt, err := w.txdb.GetTx(txid)
+	return err == nil && wt != nil
+}
+
+// TestScanFloorArmedAfterSnapshot: while a history scan runs from a floor
+// armed earlier, a transaction mined below the next scan's normal lookback is
+// stored after the scan's snapshot and arms the floor at its height. The scan
+// cannot record it, so its height must outlive that scan, whether it equals
+// the floor being scanned, lies above it or below it, and the next scan
+// records it and retires the floor.
+func TestScanFloorArmedAfterSnapshot(t *testing.T) {
+	const cursor = 100 // the next scan's normal start is 97
+	const earlier = 50
+	for _, tt := range []struct {
+		name string
+		late int32
+	}{
+		{"same height", earlier},
+		{"higher", 60},
+		{"lower", 40},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			w, db := newScanFloorWallet(t, cursor)
+			first := storeMinedCredit(t, w, 1, earlier)
+			w.armScanFloor(earlier)
+			var late string
+			db.afterView = func() {
+				if late == "" {
+					late = storeMinedCredit(t, w, 2, tt.late)
+					w.armScanFloor(uint64(tt.late))
+				}
+			}
+			w.scanNewTransactions(tCtx, cursor)
+			db.afterView = nil
+			if late == "" {
+				t.Fatal("the scan's snapshot held no transaction")
+			}
+			if !recorded(w, first) || recorded(w, late) {
+				t.Fatalf("after the first scan: earlier transaction recorded = %t, late one = %t; want true, false",
+					recorded(w, first), recorded(w, late))
+			}
+
+			w.scanNewTransactions(tCtx, cursor)
+			if !recorded(w, late) {
+				t.Fatalf("transaction mined at %d, stored after the first scan's snapshot, not recorded by the next scan", tt.late)
+			}
+			if armed := w.scanFloor.Load(); armed != 0 {
+				t.Fatalf("floor still armed at %d after the scan that reached it", armed)
+			}
+		})
+	}
+}
+
+// TestScanFloorRestoredAfterStoppedScan: a scan whose context ends after its
+// snapshot records nothing and leaves the cursor where it was, so the floor it
+// claimed goes back, merged with any height armed meanwhile for a transaction
+// stored after the snapshot. The next scan records both the transaction the
+// stopped scan held and the late one, including when the stopped scan had
+// claimed no floor at all.
+func TestScanFloorRestoredAfterStoppedScan(t *testing.T) {
+	const cursor = 100 // the next scan's normal start is 97
+	for _, tt := range []struct {
+		name       string
+		floor      uint64 // armed before the scan, 0 for none
+		held, late int32
+	}{
+		{"same height", 50, 50, 50},
+		{"higher", 50, 50, 60},
+		{"lower", 50, 50, 40},
+		{"no floor claimed", 0, 98, 60},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			w, db := newScanFloorWallet(t, cursor)
+			held := storeMinedCredit(t, w, 1, tt.held)
+			w.armScanFloor(tt.floor)
+			ctx, cancel := context.WithCancel(tCtx)
+			defer cancel()
+			var late string
+			db.afterView = func() {
+				if late == "" {
+					late = storeMinedCredit(t, w, 2, tt.late)
+					w.armScanFloor(uint64(tt.late))
+					cancel()
+				}
+			}
+			// A tip above the cursor, so a stopped scan that advanced the
+			// cursor anyway would show.
+			w.scanNewTransactions(ctx, cursor+1)
+			db.afterView = nil
+			if late == "" {
+				t.Fatal("the scan took no snapshot")
+			}
+			if got := w.receiveTxLastQuery.Load(); got != cursor || recorded(w, held) {
+				t.Fatalf("stopped scan: cursor = %d, held transaction recorded = %t; want %d, false",
+					got, recorded(w, held), cursor)
+			}
+
+			w.scanNewTransactions(tCtx, cursor)
+			for _, tx := range []struct {
+				what, txid string
+				height     int32
+			}{
+				{"held by the stopped scan's snapshot", held, tt.held},
+				{"stored after that snapshot", late, tt.late},
+			} {
+				if !recorded(w, tx.txid) {
+					t.Errorf("transaction mined at %d, %s, not recorded by the next scan", tx.height, tx.what)
+				}
+			}
+		})
 	}
 }
 

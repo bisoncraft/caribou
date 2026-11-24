@@ -262,9 +262,11 @@ type NativeWallet struct {
 	// harness electrumx pushes lazily and blocks mine within seconds) makes
 	// the transaction arrive as an already-mined import, which the
 	// coalescing NotificationServer reports under a block below
-	// receiveTxLastQuery. The register holds the lowest such height until a
-	// scan actually consumes it, so a scan that fails or stops early cannot
-	// lose the regression.
+	// receiveTxLastQuery. The register holds the lowest such height armed
+	// since the last scan claimed it. A scan claims it before taking its
+	// snapshot and, if it fails or stops early, puts the claimed height back,
+	// so every armed height is either scanned by a snapshot taken after it
+	// was armed or left armed for the next scan.
 	scanFloor atomic.Uint64
 	// txHistorySync runs one syncTxHistory pass at a time and reruns it for
 	// requests made while a pass is running.
@@ -1174,10 +1176,10 @@ func (w *NativeWallet) peerLoop(ctx context.Context) {
 // snapshot before the later ones were stored would otherwise leave them
 // unrecorded until the next block. A rerun scans to the synced height its own
 // sync check reports, since the requests it serves may carry newer tips than
-// this call's. It peeks the scan floor afresh, so a floor lowered during the
-// previous pass, which that pass's clear leaves armed (see clearScanFloor),
-// is scanned from. Callers share the wallet's connection context, under which
-// a rerun runs.
+// this call's. Each scan covers the scan floor it claims, and the next scan
+// reaches any height armed after that claim, whatever its value, provided it
+// runs and its read succeeds (see takeScanFloor). Callers share the wallet's
+// connection context, under which a rerun runs.
 func (w *NativeWallet) syncTxHistory(ctx context.Context, tip uint64) {
 	if w.txdb == nil || w.btcw == nil {
 		return
@@ -1252,8 +1254,12 @@ func (g *rerunGuard) do(ctx context.Context, pass func(rerun bool)) {
 }
 
 // armScanFloor lowers the pending scan-floor override to h if it is below the
-// currently armed value (0 = none armed). See the scanFloor field docs.
+// currently armed value (0 = none armed). An h of 0 names no block and changes
+// nothing. See the scanFloor field docs.
 func (w *NativeWallet) armScanFloor(h uint64) {
+	if h == 0 {
+		return
+	}
 	for {
 		cur := w.scanFloor.Load()
 		if cur != 0 && cur <= h {
@@ -1265,33 +1271,24 @@ func (w *NativeWallet) armScanFloor(h uint64) {
 	}
 }
 
-// peekScanFloor returns the height a scan that would otherwise start from
-// lastQuery should start from, along with the armed override it observed (0 for
-// none). An override never raises the floor, and a never-scanned wallet
-// (lastQuery 0) already scans from the beginning.
+// takeScanFloor claims the armed override (0 for none) for a scan that would
+// otherwise start from lastQuery, leaving the register empty, and returns the
+// height the scan should start from along with the claimed value. An override
+// never raises the start height, and a never-scanned wallet (lastQuery 0)
+// already scans from the beginning.
 //
-// The override is read, not consumed: a scan that does not complete must leave
-// it armed for the next one. See clearScanFloor.
-func (w *NativeWallet) peekScanFloor(lastQuery uint64) (from, floor uint64) {
-	floor = w.scanFloor.Load()
+// The claim must come before the scan's snapshot. A transaction is stored
+// before the notification that arms its height, so a height claimed here is
+// stored by the time the snapshot is taken, and a height armed after the claim
+// lands in the empty register for the next scan, whatever its value. A scan
+// that does not complete puts the claimed value back with armScanFloor, which
+// merges it with anything armed since by keeping the minimum.
+func (w *NativeWallet) takeScanFloor(lastQuery uint64) (from, floor uint64) {
+	floor = w.scanFloor.Swap(0)
 	if floor != 0 && lastQuery != 0 && floor < lastQuery {
 		return floor, floor
 	}
 	return lastQuery, floor
-}
-
-// clearScanFloor retires the override that peekScanFloor observed, once the scan
-// it was observed for has actually covered those blocks. Only that exact value
-// is retired: armScanFloor only ever lowers the register, so a value that
-// changed under us is a lower floor armed while the scan was running, naming
-// blocks this scan started above and did not reach. Swapping it away would drop
-// the late-notified mined transaction it was armed for from tx history for the
-// life of the process, which is the whole thing the register exists to prevent.
-func (w *NativeWallet) clearScanFloor(floor uint64) {
-	if floor == 0 {
-		return
-	}
-	w.scanFloor.CompareAndSwap(floor, 0)
 }
 
 // scanNewTransactions queries the wallet for transactions since the last scan
@@ -1299,7 +1296,16 @@ func (w *NativeWallet) clearScanFloor(floor uint64) {
 func (w *NativeWallet) scanNewTransactions(ctx context.Context, tip uint64) {
 	const blockQueryBuffer = 3
 
-	lastQuery, floor := w.peekScanFloor(w.receiveTxLastQuery.Load())
+	lastQuery, floor := w.takeScanFloor(w.receiveTxLastQuery.Load())
+	// Every return before the cursor advance leaves the cursor where it was,
+	// so the claimed floor goes back for the next scan. Dropping it would
+	// leave blocks below the cursor that no scan reaches again.
+	scanned := false
+	defer func() {
+		if !scanned {
+			w.armScanFloor(floor)
+		}
+	}()
 	var fromHeight int32
 	if lastQuery > blockQueryBuffer {
 		fromHeight = int32(lastQuery - blockQueryBuffer)
@@ -1321,12 +1327,7 @@ func (w *NativeWallet) scanNewTransactions(ctx context.Context, tip uint64) {
 		w.recordBtcjsonTx(ctx, &txs[i], tip, isInitial)
 	}
 
-	// Retire the floor only here, next to the cursor advance, because the two
-	// say the same thing: the blocks up to tip have been scanned. Every return
-	// above leaves the cursor where it was, and a floor consumed on one of those
-	// paths would be a lowered start height that no scan ever used - the blocks
-	// below the cursor would never be reached again.
-	w.clearScanFloor(floor)
+	scanned = true
 	w.receiveTxLastQuery.Store(tip)
 
 	if isInitial {
