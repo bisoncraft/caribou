@@ -15,11 +15,16 @@
 // layouts were pinned against transactions built by Dash Core v23.1.4 (version
 // 2, regular and EvoNode) and v24.0.0 (version 3, types 10 to 12), see testdata.
 //
-// Decoding a version 3 ProRegTx and encoding it again gives the same bytes,
-// but a hash over a payload this wallet did not build must still use the bytes
-// as received (bisonwire.Tx.ExtraPayload), never a re-encoding. Version 2 does
-// not have that property, see Service. PayloadHash and CollateralMessage return
-// ErrUnsupportedVersion for version 3 until the digests are pinned.
+// Decoding a version 3 ProRegTx or a type 10 to 12 payload and encoding it
+// again gives the same bytes. So the PayloadHash of types 11 and 12, computed
+// from the decoded fields, equals a hash of the bytes as received. The other
+// shared masternode digests (SharedRegConsentHash and ProDisTx.SignHash) are
+// not hashes of the payload, see digest.go for what they cover. Version 2 does
+// not have that property, see Service, so a hash over a version 2 payload this
+// wallet did not build must use the bytes as received
+// (bisonwire.Tx.ExtraPayload). The PayloadHash and CollateralMessage of a
+// version 3 ProRegTx, which an external collateral key signs, return
+// ErrUnsupportedVersion: no vector pins them yet.
 //
 // Serialize applies the length limits Deserialize does (10000 bytes for a
 // script, 96 for a signature), so a payload that is written can be read back.
@@ -203,6 +208,22 @@ type Share struct {
 	// registration. On the wire all shares are written first, then all join
 	// signatures.
 	JoinSig [CompactSigSize]byte
+}
+
+// serialize writes the share without its join signature, which the payload
+// writes after all the shares, and the consent digest does not cover.
+func (s *Share) serialize(w io.Writer) error {
+	if err := writeU64(w, uint64(s.Amount)); err != nil {
+		return err
+	}
+	if err := writeBytes(w, "refund script", s.RefundScript, maxScriptSize); err != nil {
+		return err
+	}
+	if err := writeBytes(w, "reward script", s.RewardScript, maxScriptSize); err != nil {
+		return err
+	}
+	_, err := w.Write(s.KeyIDOwner[:])
+	return err
 }
 
 // ProRegTx is a provider registration payload (special transaction type 1).
@@ -400,17 +421,7 @@ func (p *ProRegTx) serializeExt(w io.Writer, withSig bool) error {
 		return err
 	}
 	for i := range p.Shares {
-		s := &p.Shares[i]
-		if err := writeU64(w, uint64(s.Amount)); err != nil {
-			return err
-		}
-		if err := writeBytes(w, "refund script", s.RefundScript, maxScriptSize); err != nil {
-			return err
-		}
-		if err := writeBytes(w, "reward script", s.RewardScript, maxScriptSize); err != nil {
-			return err
-		}
-		if _, err := w.Write(s.KeyIDOwner[:]); err != nil {
+		if err := p.Shares[i].serialize(w); err != nil {
 			return err
 		}
 	}

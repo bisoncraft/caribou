@@ -12,9 +12,9 @@ import (
 )
 
 // The payloads below belong to the shared masternodes of Dash Core v24 and
-// are special transaction types 10 to 12. They have no PayloadHash yet: the
-// digests their signatures cover are not the double SHA-256 of the payload,
-// and are left to the code that signs them.
+// are special transaction types 10 to 12. What their signatures cover is in
+// digest.go: a dissolution's is not a hash of the payload at all, but of the
+// transaction.
 
 // ProDisTx is a shared masternode dissolution payload (special transaction type
 // 10). It has no inputsHash: the signatures cover the transaction's inputs and
@@ -80,6 +80,10 @@ type ProUpShareTx struct {
 
 // Serialize writes the payload.
 func (p *ProUpShareTx) Serialize(w io.Writer) error {
+	return p.serialize(w, true)
+}
+
+func (p *ProUpShareTx) serialize(w io.Writer, withSig bool) error {
 	if p.Version != SharedVersion {
 		return ErrUnsupportedVersion
 	}
@@ -97,6 +101,9 @@ func (p *ProUpShareTx) Serialize(w io.Writer) error {
 	}
 	if _, err := w.Write(p.InputsHash[:]); err != nil {
 		return err
+	}
+	if !withSig {
+		return nil
 	}
 	if len(p.Sig) < CompactSigSize {
 		return fmt.Errorf("%w: %d bytes, want %d", ErrBadSigSize, len(p.Sig), CompactSigSize)
@@ -149,6 +156,15 @@ type ProUpSharedRegTx struct {
 
 // Serialize writes the payload.
 func (p *ProUpSharedRegTx) Serialize(w io.Writer) error {
+	if err := p.serializeBody(w); err != nil {
+		return err
+	}
+	return writeSigs(w, p.Sigs)
+}
+
+// serializeBody writes the payload without its signatures, which is what the
+// signatures cover.
+func (p *ProUpSharedRegTx) serializeBody(w io.Writer) error {
 	if p.Version != SharedVersion {
 		return ErrUnsupportedVersion
 	}
@@ -160,7 +176,7 @@ func (p *ProUpSharedRegTx) Serialize(w io.Writer) error {
 			return err
 		}
 	}
-	return writeSigs(w, p.Sigs)
+	return nil
 }
 
 // Deserialize reads the payload.
