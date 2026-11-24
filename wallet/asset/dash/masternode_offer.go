@@ -306,6 +306,7 @@ func (dw *dashWallet) MasternodeOffers(ctx context.Context) ([]*asset.Masternode
 	registered := ownersOf(mgr)
 	now := dw.clock().Unix()
 	var out []*asset.MasternodeOffer
+	reaped := false
 	for _, o := range all {
 		state := string(o.State)
 		switch {
@@ -318,11 +319,16 @@ func (dw *dashWallet) MasternodeOffers(ctx context.Context) ([]*asset.Masternode
 			if err := mgr.Store().DeleteOffer(o.ID); err != nil {
 				return nil, err
 			}
+			reaped = true
 			continue
 		case now >= o.ExpiresAt && o.State == masternode.OfferSigned:
 			state = "expired"
 		}
 		out = append(out, dw.toAssetOffer(o, state))
+	}
+	// The inputs of an offer that expired are available again.
+	if reaped {
+		dw.PushBalance()
 	}
 	slices.SortFunc(out, func(a, b *asset.MasternodeOffer) int {
 		if a.CreatedAt != b.CreatedAt {
@@ -476,6 +482,11 @@ func (dw *dashWallet) ReviewMasternodeRegistration(ctx context.Context, offerID,
 	// The signatures that come with the blob must be good.
 	if err := rv.AddJoinSigs(sigs); err != nil {
 		return nil, err
+	}
+	// A signed offer signs again only a complete registration, so a review of
+	// another says so now instead of when it is asked to sign.
+	if o.State == masternode.OfferSigned && rv.Complete() != nil {
+		return nil, errors.New("the offer has signed: review the complete registration")
 	}
 	return dw.toAssetReview(o, rv), nil
 }

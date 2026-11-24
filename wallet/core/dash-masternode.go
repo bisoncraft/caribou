@@ -82,8 +82,6 @@ func (c *Core) MasternodeOffers(ctx context.Context, assetID uint32) ([]*asset.M
 	if err != nil {
 		return nil, err
 	}
-	// Listing releases the inputs of offers that have expired.
-	c.updateAssetBalance(assetID)
 	return offers, nil
 }
 

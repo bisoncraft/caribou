@@ -1144,7 +1144,9 @@ type MasternodeOwner interface {
 	// lasts until it expires or is cancelled. The wallet must be unlocked.
 	CreateMasternodeOffer(ctx context.Context, amount uint64) (*MasternodeOffer, error)
 	// MasternodeOffers lists the offers, dropping the expired ones that have
-	// signed nothing.
+	// signed nothing and pushing a balance if that frees any inputs. An offer
+	// that has signed is listed as expired until it is cancelled, and is not
+	// dropped, because its registration can still be broadcast by whoever has it.
 	MasternodeOffers(ctx context.Context) ([]*MasternodeOffer, error)
 	// CancelMasternodeOffer releases an offer's inputs and deletes it. It does
 	// not revoke signatures already given: only spending an input does.

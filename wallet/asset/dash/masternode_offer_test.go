@@ -625,6 +625,14 @@ func TestSignIsRepeatable(t *testing.T) {
 	if again.Blob != first.Blob {
 		t.Fatal("a retry gave another blob")
 	}
+	// A signed offer reviews only the complete registration, and says so before
+	// it is asked to sign.
+	if _, err := r.dw.ReviewMasternodeRegistration(ctx, o.ID, blobOf(t, tx)); err == nil || !strings.Contains(err.Error(), "complete registration") {
+		t.Fatalf("a signed offer reviewed an incomplete registration: %v", err)
+	}
+	if _, err := r.dw.ReviewMasternodeRegistration(ctx, o.ID, blob); err != nil {
+		t.Fatalf("a signed offer's complete registration: %v", err)
+	}
 	// Another registration is not the one the offer signed.
 	if _, err := r.dw.ReviewMasternodeRegistration(ctx, o.ID, blobOf(t, other)); err == nil {
 		t.Fatal("a signed offer took another registration")
