@@ -63,6 +63,9 @@ func (c *tCoin) Confirmations(context.Context) (uint32, error) {
 
 type TCore struct {
 	clientCore           // This is here so we don't have to implement core methods we're not testing
+	receivers            *asset.AddressReceivers
+	receiversErr         error
+	receiversAsked       string
 	fiatRates            map[uint32]float64
 	balanceErr           error
 	loginErr             error
@@ -179,6 +182,10 @@ func (c *TCore) EstablishTrustline(pw []byte, assetID uint32) (string, error) {
 }
 func (c *TCore) ValidateAddress(address string, assetID uint32) (bool, error) {
 	return c.validAddr, nil
+}
+func (c *TCore) AddressReceivers(assetID uint32, address string) (*asset.AddressReceivers, error) {
+	c.receiversAsked = address
+	return c.receivers, c.receiversErr
 }
 func (c *TCore) EstimateSendTxFee(addr string, assetID uint32, value uint64, subtract, maxWithdraw bool) (*core.SendFeeEstimate, error) {
 	if c.estFeeErr != nil {
@@ -1133,6 +1140,13 @@ func TestTermsGateRouting(t *testing.T) {
 	if code := post("/api/send", false); code != http.StatusUnauthorized {
 		t.Fatalf("unauthenticated /api/send: code = %d, wanted 401", code)
 	}
+	// The receivers of an address are behind both checks as well.
+	if code := post("/api/addressreceivers", false); code != http.StatusUnauthorized {
+		t.Fatalf("unauthenticated /api/addressreceivers: code = %d, wanted 401", code)
+	}
+	if code := post("/api/addressreceivers", true); code != http.StatusForbidden {
+		t.Fatalf("/api/addressreceivers before acceptance: code = %d, wanted 403", code)
+	}
 
 	tCore.acceptedTerms = termsVersion
 	if code := post("/api/send", true); code == http.StatusForbidden || code == http.StatusUnauthorized {
@@ -1520,6 +1534,45 @@ func TestAPIValidateAddress(t *testing.T) {
 	want = `{"ok":false}`
 	tCore.validAddr = false
 	ensureResponse(t, s.apiValidateAddress, want, reader, writer, body, nil)
+}
+
+func TestAPIAddressReceivers(t *testing.T) {
+	s, tCore, shutdown := newTServer(t, false)
+	defer shutdown()
+
+	writer := new(TWriter)
+	reader := new(TReader)
+	testID := uint32(42)
+	body := &struct {
+		AssetID *uint32 `json:"assetID"`
+		Addr    string  `json:"addr"`
+	}{
+		AssetID: &testID,
+		Addr:    "unified",
+	}
+
+	height := uint64(1_000)
+	tCore.receivers = &asset.AddressReceivers{
+		Receivers: []*asset.AddressReceiver{
+			{Kind: asset.ReceiverShielded, Pool: "Shielded", Address: "shielded-only", Preferred: true},
+			{Kind: asset.ReceiverTransparent, Pool: "Transparent", Address: "transparent-only"},
+		},
+		ExpiryHeight: &height,
+	}
+	want := `{"ok":true,"receivers":[` +
+		`{"kind":"shielded","pool":"Shielded","address":"shielded-only","preferred":true},` +
+		`{"kind":"transparent","pool":"Transparent","address":"transparent-only","preferred":false}],` +
+		`"expiryHeight":1000}`
+	ensureResponse(t, s.apiAddressReceivers, want, reader, writer, body, nil)
+	if tCore.receiversAsked != "unified" {
+		t.Errorf("asked about %q", tCore.receiversAsked)
+	}
+
+	tCore.receivers, tCore.receiversErr = nil, errors.New("not payable")
+	ensureResponse(t, s.apiAddressReceivers, `{"ok":false,"msg":"not payable"}`, reader, writer, body, nil)
+
+	body.AssetID = nil
+	ensureResponse(t, s.apiAddressReceivers, `{"ok":false,"msg":"missing asset ID"}`, reader, writer, body, nil)
 }
 
 func TestAPIEstimateSendTxFee(t *testing.T) {

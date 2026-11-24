@@ -42,6 +42,7 @@ const (
 	WalletTraitDeprContractGasTester                         // DEPRECATED. Left for ordering
 	WalletTraitPoliteiaVoter                                 // The wallet can vote on Politeia proposals.
 	WalletTraitDestinationTagger                             // The wallet's Send accepts a destination tag.
+	WalletTraitReceiverLister                                // The wallet lists the receivers of an address.
 )
 
 // IsRescanner tests if the WalletTrait has the WalletTraitRescanner bit set.
@@ -142,6 +143,12 @@ func (wt WalletTrait) IsDestinationTagger() bool {
 	return wt&WalletTraitDestinationTagger != 0
 }
 
+// IsReceiverLister tests if the WalletTrait has the WalletTraitReceiverLister
+// bit set, which indicates the wallet implements the ReceiverLister interface.
+func (wt WalletTrait) IsReceiverLister() bool {
+	return wt&WalletTraitReceiverLister != 0
+}
+
 // DetermineWalletTraits returns the WalletTrait bitset for the provided Wallet.
 func DetermineWalletTraits(w Wallet) (t WalletTrait) {
 	if _, is := w.(Rescanner); is {
@@ -191,6 +198,9 @@ func DetermineWalletTraits(w Wallet) (t WalletTrait) {
 	}
 	if _, is := w.(DestinationTagger); is {
 		t |= WalletTraitDestinationTagger
+	}
+	if _, is := w.(ReceiverLister); is {
+		t |= WalletTraitReceiverLister
 	}
 	return t
 }
@@ -516,6 +526,64 @@ type DestinationTagger interface {
 	// SendTagged sends value to address with destTag included in the
 	// transaction. Semantics otherwise match Wallet.Send.
 	SendTagged(address string, value, feeRate uint64, destTag uint32) (Coin, error)
+}
+
+// ReceiverLister is a wallet whose addresses can hold several receivers, each
+// of which a sender can pay on its own.
+type ReceiverLister interface {
+	// AddressReceivers returns the receivers of an address of the wallet's
+	// network. It reads the address alone: it must not wait on the network
+	// or on the wallet's database, and it answers whether or not the wallet
+	// is connected. An address that does not decode, or with no receiver
+	// the wallet can pay, is an error; an expiry is not. A successful answer
+	// has at least one receiver.
+	AddressReceivers(address string) (*AddressReceivers, error)
+}
+
+// ReceiverKind is the kind of a receiver of an address.
+type ReceiverKind string
+
+const (
+	// ReceiverShielded is a receiver in a shielded pool.
+	ReceiverShielded ReceiverKind = "shielded"
+	// ReceiverTransparent is a transparent receiver.
+	ReceiverTransparent ReceiverKind = "transparent"
+)
+
+// AddressReceivers is the answer of ReceiverLister.AddressReceivers.
+type AddressReceivers struct {
+	// Receivers are the receivers the wallet can pay, in the wallet's
+	// order: shielded before transparent. It is not the order of the
+	// address's encoding. A receiver the wallet cannot pay is left out.
+	Receivers []*AddressReceiver `json:"receivers"`
+	// ExpiryHeight and ExpiryTime (Unix seconds) are the address's expiry,
+	// nil when it has none. As ZIP 316 defines them they constrain the
+	// sender: a sender must not pay the address once the chain tip is above
+	// ExpiryHeight or the current time is past ExpiryTime, and a height
+	// expiry also bounds the expiry height of the paying transaction. A
+	// transaction sent before the time can still be mined after it.
+	// AddressReceivers reports the expiry and does not check it: it reads
+	// neither the chain tip nor the clock, and returns the receivers of an
+	// address that has expired.
+	ExpiryHeight *uint64 `json:"expiryHeight,omitempty"`
+	ExpiryTime   *uint64 `json:"expiryTime,omitempty"`
+}
+
+// AddressReceiver is one receiver of an address.
+type AddressReceiver struct {
+	Kind ReceiverKind `json:"kind"`
+	// Pool is the display name of the receiver's pool.
+	Pool string `json:"pool"`
+	// Address is the receiver encoded as an address a sender can pay on its
+	// own. For an address with an expiry, an asset's encoding may carry the
+	// expiry with the receiver: a Zcash transparent receiver of an expiring
+	// unified address is that address reduced to the transparent receiver
+	// and the expiry, not a bare transparent address.
+	Address string `json:"address"`
+	// Preferred is set for the receiver a payment from this wallet to the
+	// address would go to. It is the wallet's own send policy, not a
+	// property of the address: another wallet may pay another receiver.
+	Preferred bool `json:"preferred"`
 }
 
 // Broadcaster is a wallet that can send a raw transaction on the asset network.

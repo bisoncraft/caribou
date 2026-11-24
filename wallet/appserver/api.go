@@ -53,6 +53,35 @@ func (s *AppServer) apiValidateAddress(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, resp)
 }
 
+// apiAddressReceivers is the handler for the '/addressreceivers' API request:
+// the receivers of an address, for a wallet that lists them. It answers for
+// a wallet that is not connected as well.
+func (s *AppServer) apiAddressReceivers(w http.ResponseWriter, r *http.Request) {
+	form := &struct {
+		AssetID *uint32 `json:"assetID"`
+		Addr    string  `json:"addr"`
+	}{}
+	if !readPost(w, r, form) {
+		return
+	}
+	if form.AssetID == nil {
+		s.writeAPIError(w, errors.New("missing asset ID"))
+		return
+	}
+	receivers, err := s.core.AddressReceivers(*form.AssetID, form.Addr)
+	if err != nil {
+		s.writeAPIError(w, err)
+		return
+	}
+	writeJSON(w, &struct {
+		OK bool `json:"ok"`
+		*asset.AddressReceivers
+	}{
+		OK:               true,
+		AddressReceivers: receivers,
+	})
+}
+
 // apiEstimateSendTxFee is the handler for the '/txfee' API request.
 func (s *AppServer) apiEstimateSendTxFee(w http.ResponseWriter, r *http.Request) {
 	form := new(sendTxFeeForm)

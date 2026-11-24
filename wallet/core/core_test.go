@@ -1861,6 +1861,73 @@ func TestValidateAddress(t *testing.T) {
 	}
 }
 
+// tReceiverListerWallet wraps TXCWallet to also implement
+// asset.ReceiverLister.
+type tReceiverListerWallet struct {
+	*TXCWallet
+	receivers *asset.AddressReceivers
+	asked     string
+}
+
+func (w *tReceiverListerWallet) AddressReceivers(address string) (*asset.AddressReceivers, error) {
+	w.asked = address
+	if address == "" {
+		return nil, errors.New("not an address")
+	}
+	return w.receivers, nil
+}
+
+func TestAddressReceivers(t *testing.T) {
+	rig := newTestRig()
+	defer rig.shutdown()
+	tCore := rig.core
+
+	xcw, tw := newTWallet(tUTXOAssetA.ID)
+	lister := &tReceiverListerWallet{TXCWallet: tw, receivers: &asset.AddressReceivers{
+		Receivers: []*asset.AddressReceiver{
+			{Kind: asset.ReceiverShielded, Pool: "Shielded", Address: "shielded-only", Preferred: true},
+			{Kind: asset.ReceiverTransparent, Pool: "Transparent", Address: "transparent-only"},
+		},
+	}}
+	xcw.Wallet = lister
+	tCore.wallets[tUTXOAssetA.ID] = xcw
+	if !asset.DetermineWalletTraits(lister).IsReceiverLister() {
+		t.Fatal("a ReceiverLister does not get the trait")
+	}
+	if asset.DetermineWalletTraits(tw).IsReceiverLister() {
+		t.Fatal("a wallet that is not a ReceiverLister gets the trait")
+	}
+
+	got, err := tCore.AddressReceivers(tUTXOAssetA.ID, "unified")
+	if err != nil || got != lister.receivers || lister.asked != "unified" {
+		t.Fatalf("AddressReceivers: %+v, %v (asked %q)", got, err, lister.asked)
+	}
+	if _, err := tCore.AddressReceivers(tUTXOAssetA.ID, ""); err == nil {
+		t.Error("the wallet's error was not returned")
+	}
+
+	// A disabled wallet, which is not connected, still answers.
+	xcw.mtx.Lock()
+	xcw.disabled = true
+	xcw.hookedUp = false
+	xcw.mtx.Unlock()
+	if got, err := tCore.AddressReceivers(tUTXOAssetA.ID, "unified"); err != nil || got != lister.receivers {
+		t.Errorf("a disabled wallet: %+v, %v", got, err)
+	}
+
+	// A wallet that is not a ReceiverLister.
+	plain, _ := newTWallet(tUTXOAssetB.ID)
+	tCore.wallets[tUTXOAssetB.ID] = plain
+	if _, err := tCore.AddressReceivers(tUTXOAssetB.ID, "unified"); err == nil {
+		t.Error("a wallet that is not a ReceiverLister answered")
+	}
+
+	// No wallet: the wallet failed to load, or was never created.
+	if _, err := tCore.AddressReceivers(tACCTAsset.ID, "unified"); !errorHasCode(err, missingWalletErr) {
+		t.Errorf("a missing wallet: %v", err)
+	}
+}
+
 func TestEstimateSendTxFee(t *testing.T) {
 	rig := newTestRig()
 	defer rig.shutdown()

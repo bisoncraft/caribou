@@ -83,6 +83,12 @@ export const traitWithdrawer = 1 << 6
 // WalletState.traits.
 export const traitDestinationTagger = 1 << 22
 
+// traitReceiverLister marks wallets that list the receivers of an address
+// (/api/addressreceivers), such as a Zcash unified address's shielded and
+// transparent receivers. Mirrors the asset.WalletTrait bit in Go; test against
+// WalletState.traits.
+export const traitReceiverLister = 1 << 23
+
 export interface WalletState {
   symbol: string
   assetID: number
