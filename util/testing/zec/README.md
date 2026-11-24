@@ -89,11 +89,15 @@ each run:
 
 | Node  | P2P     | JSON-RPC | Light-client gRPC |
 |-------|---------|----------|-------------------|
-| alpha | `33764` | `33768`  | `33770`           |
-| beta  | `33765` | `33769`  | `33771`           |
+| alpha | `22764` | `22768`  | `22770`           |
+| beta  | `22765` | `22769`  | `22771`           |
 
 All ports listen on `127.0.0.1`. The JSON-RPC servers run with cookie
 authentication disabled. The gRPC servers are plaintext and unauthenticated.
+
+The ports are below 32768, where Linux starts handing out ports for outgoing
+connections. A node whose port lies in that range fails to start with
+`Address already in use` when another connection happens to hold the port.
 
 ## Funder wallets
 
@@ -160,7 +164,7 @@ The scripts are in `~/dextest/zec/harness-ctl`.
 
 ## Connecting a light wallet
 
-A wallet under test connects to `127.0.0.1:33770` (alpha) or `127.0.0.1:33771`
+A wallet under test connects to `127.0.0.1:22770` (alpha) or `127.0.0.1:22771`
 (beta) with the lightwalletd `CompactTxStreamer` gRPC protocol, without TLS.
 
 - **Network parameters.** The chain is regtest with Overwinter through NU7 at
@@ -186,10 +190,10 @@ empty mnemonic on standard input generates a new one:
 ```sh
 mkdir w
 echo "" | zcash-devtool wallet -w w init --name test -i w/age-identity.txt \
-  --birthday 400 -n regtest -s 127.0.0.1:33770 --connection direct \
+  --birthday 400 -n regtest -s 127.0.0.1:22770 --connection direct \
   --activation-heights ~/dextest/zec/activation-heights.toml
 zcash-devtool wallet -w w list-addresses
-zcash-devtool wallet -w w sync -s 127.0.0.1:33770 --connection direct
+zcash-devtool wallet -w w sync -s 127.0.0.1:22770 --connection direct
 zcash-devtool wallet -w w balance --min-confirmations 1
 ```
 
@@ -221,9 +225,13 @@ zcash-devtool wallet -w w balance --min-confirmations 1
   reason. A zcash-devtool wallet funded with `./mine-to` to a Sapling or
   unified address is affected.
 - **Reorgs.** Zebra has no `disconnectnode`. `./reorg` invalidates blocks on
-  alpha and mines a longer replacement chain, which beta follows.
-  Transactions in the replaced blocks are dropped. They do not return to the
-  mempool, and a wallet sees them as unmined until they expire. The funders'
+  alpha and mines a longer replacement chain, which beta follows. The
+  replacement blocks do not hold the transactions of the replaced ones, but
+  zebrad retries a transaction that was sent to it until it is mined or its
+  retry entry lapses. A transaction that is still valid on the new chain was
+  back in the mempool within 35 seconds in tests, and is mined in the next
+  block. A transaction whose anchor is the tree state of a replaced block
+  stays out, and a wallet sees it as unmined until it expires. The funders'
   funding transactions are at heights 401 and 402, under 20 further setup
   blocks. A reorg that reaches those heights leaves a funder with no
   spendable balance, and the harness then has to be restarted.
