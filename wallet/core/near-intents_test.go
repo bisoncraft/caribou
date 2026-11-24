@@ -1046,6 +1046,173 @@ func TestIntentsDeadlines(t *testing.T) {
 	}
 }
 
+// tReceiverWallet is a test wallet whose addresses hold several receivers.
+type tReceiverWallet struct {
+	*TXCWallet
+	receivers *asset.AddressReceivers
+	err       error
+	asked     string
+	// newAddr, if set, is the address NewAddress gives.
+	newAddr string
+}
+
+func (w *tReceiverWallet) AddressReceivers(address string) (*asset.AddressReceivers, error) {
+	w.asked = address
+	return w.receivers, w.err
+}
+
+func (w *tReceiverWallet) NewAddress() (string, error) {
+	if w.newAddr == "" {
+		return w.TXCWallet.NewAddress()
+	}
+	return w.newAddr, nil
+}
+
+// TestIntentsWalletAddress checks the address a swap names for a wallet: the
+// deposit address, or its transparent receiver when the wallet's addresses
+// hold several receivers, and never the full address in that case.
+func TestIntentsWalletAddress(t *testing.T) {
+	const unified, shielded, transparent = "u1both", "u1shielded", "t1transparent"
+	w, tw := newTWallet(133)
+	w.address = unified
+
+	if got, err := intentsWalletAddress(w); err != nil || got != unified {
+		t.Fatalf("a wallet with one kind of address: %q, %v, want its deposit address", got, err)
+	}
+
+	both := &asset.AddressReceivers{Receivers: []*asset.AddressReceiver{
+		{Kind: asset.ReceiverShielded, Pool: "Ironwood", Address: shielded, Preferred: true},
+		{Kind: asset.ReceiverTransparent, Pool: "Transparent", Address: transparent},
+	}}
+	lister := &tReceiverWallet{TXCWallet: tw, receivers: both}
+	w.Wallet = lister
+	if got, err := intentsWalletAddress(w); err != nil || got != transparent {
+		t.Fatalf("a wallet with several receivers: %q, %v, want the transparent receiver", got, err)
+	}
+	if lister.asked != unified {
+		t.Fatalf("the receivers of %q were listed, want those of the deposit address", lister.asked)
+	}
+
+	// A held address that is transparent is listed like any other and is
+	// its own transparent receiver.
+	w.address = transparent
+	lister.receivers = &asset.AddressReceivers{Receivers: []*asset.AddressReceiver{
+		{Kind: asset.ReceiverTransparent, Pool: "Transparent", Address: transparent, Preferred: true},
+	}}
+	if got, err := intentsWalletAddress(w); err != nil || got != transparent {
+		t.Fatalf("a transparent deposit address: %q, %v", got, err)
+	}
+	if lister.asked != transparent {
+		t.Fatalf("the receivers of %q were listed, want those of the transparent deposit address", lister.asked)
+	}
+
+	w.address = unified
+	lister.receivers = &asset.AddressReceivers{Receivers: []*asset.AddressReceiver{
+		{Kind: asset.ReceiverShielded, Pool: "Ironwood", Address: shielded, Preferred: true},
+	}}
+	if got, err := intentsWalletAddress(w); err == nil {
+		t.Fatalf("an address with no transparent receiver gave %q, want an error", got)
+	}
+
+	listErr := errors.New("test listing error")
+	lister.receivers, lister.err = nil, listErr
+	if got, err := intentsWalletAddress(w); !errors.Is(err, listErr) {
+		t.Fatalf("a failed listing: %q, %v, want the wallet's error", got, err)
+	}
+	lister.receivers, lister.err = both, nil
+
+	// A wallet that is not connected still lists the receivers of the
+	// address core holds for it.
+	w.hookedUp = false
+	lister.asked = ""
+	if got, err := intentsWalletAddress(w); err != nil || got != transparent {
+		t.Fatalf("an unconnected wallet with a held address: %q, %v", got, err)
+	}
+	if lister.asked != unified {
+		t.Fatalf("an unconnected wallet listed the receivers of %q", lister.asked)
+	}
+	// With no address held it cannot give one, and nothing is listed.
+	w.address = ""
+	lister.asked = ""
+	if got, err := intentsWalletAddress(w); err == nil {
+		t.Fatalf("an unconnected wallet with no held address gave %q, want an error", got)
+	}
+	if lister.asked != "" {
+		t.Fatalf("an unconnected wallet with no held address listed the receivers of %q", lister.asked)
+	}
+	w.hookedUp = true
+
+	// With no address held, one is requested from the wallet, kept as the
+	// deposit address, and reduced like a held one.
+	const fresh = "u1fresh"
+	lister.newAddr = fresh
+	if got, err := intentsWalletAddress(w); err != nil || got != transparent {
+		t.Fatalf("no address held: %q, %v, want the transparent receiver", got, err)
+	}
+	if lister.asked != fresh {
+		t.Fatalf("the receivers of %q were listed, want those of the new address", lister.asked)
+	}
+	if held := w.currentDepositAddress(); held != fresh {
+		t.Fatalf("the deposit address held after the request is %q, want %q", held, fresh)
+	}
+
+	// A wallet that fails to give an address fails the request, and nothing
+	// is listed.
+	w.address = ""
+	lister.newAddr, lister.asked = "", ""
+	tw.addrErr = errors.New("test address error")
+	if got, err := intentsWalletAddress(w); !errors.Is(err, tw.addrErr) {
+		t.Fatalf("no address held: %q, %v, want the wallet's error", got, err)
+	}
+	if lister.asked != "" {
+		t.Fatalf("the receivers of %q were listed after a failed address request", lister.asked)
+	}
+}
+
+// TestIntentsQuoteRequestAddresses checks that a quote request names the
+// transparent receiver of a wallet with several receivers in both roles: as
+// the refund address when the wallet is the origin, and as the recipient when
+// it is the destination.
+func TestIntentsQuoteRequestAddresses(t *testing.T) {
+	const unified, transparent, plain = "u1both", "t1transparent", "bc1plain"
+	zecWallet, zecTW := newTWallet(133)
+	zecWallet.address = unified
+	zecTW.info.UnitInfo = *unitInfo(1e8)
+	zecWallet.Wallet = &tReceiverWallet{TXCWallet: zecTW, receivers: &asset.AddressReceivers{
+		Receivers: []*asset.AddressReceiver{
+			{Kind: asset.ReceiverShielded, Pool: "Ironwood", Address: "u1shielded", Preferred: true},
+			{Kind: asset.ReceiverTransparent, Pool: "Transparent", Address: transparent},
+		},
+	}}
+	btcWallet, btcTW := newTWallet(0)
+	btcWallet.address = plain
+	btcTW.info.UnitInfo = *unitInfo(1e8)
+
+	zecTok := &intents.Token{AssetID: "nep141:zec.omft.near", Decimals: 8, Blockchain: "zec"}
+	btcTok := &intents.Token{AssetID: "nep141:btc.omft.near", Decimals: 8, Blockchain: "btc"}
+	c := new(Core)
+
+	for _, dry := range []bool{true, false} {
+		for _, exactOutput := range []bool{false, true} {
+			desc := fmt.Sprintf("dry %t, exact output %t", dry, exactOutput)
+			req, err := c.intentsQuoteRequest(dry, exactOutput, zecTok, btcTok, zecWallet, btcWallet, 1e8, 0)
+			if err != nil {
+				t.Fatalf("selling ZEC (%s): %v", desc, err)
+			}
+			if req.RefundTo != transparent || req.Recipient != plain {
+				t.Fatalf("selling ZEC (%s): refund to %q, recipient %q", desc, req.RefundTo, req.Recipient)
+			}
+			req, err = c.intentsQuoteRequest(dry, exactOutput, btcTok, zecTok, btcWallet, zecWallet, 1e8, 0)
+			if err != nil {
+				t.Fatalf("buying ZEC (%s): %v", desc, err)
+			}
+			if req.RefundTo != plain || req.Recipient != transparent {
+				t.Fatalf("buying ZEC (%s): refund to %q, recipient %q", desc, req.RefundTo, req.Recipient)
+			}
+		}
+	}
+}
+
 // TestIntentsTokenResolution covers resolveIntentsAsset and
 // verifyQuoteAsset for chain natives and registered tokens, using a
 // catalog fetched from a stub tokens endpoint.
