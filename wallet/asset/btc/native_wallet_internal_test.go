@@ -6,8 +6,13 @@
 package btc
 
 import (
+	"context"
+	"fmt"
 	"math"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/bisoncraft/caribou/util"
 	"github.com/bisoncraft/caribou/wallet/asset"
@@ -102,8 +107,7 @@ func TestBtcToSats(t *testing.T) {
 
 // TestScanFloor exercises the pending scan-floor register that keeps
 // late-notified mined transactions (blocks below the scan cursor) reachable
-// by the next history scan, even when the triggering notification's scan was
-// skipped by the syncingTxHistory guard.
+// by the next history scan.
 func TestScanFloor(t *testing.T) {
 	w := &NativeWallet{}
 
@@ -213,5 +217,232 @@ func TestNativeWalletChainIdentity(t *testing.T) {
 	if w.networkID != cloneID || w.assetID != cloneID {
 		t.Fatalf("wallet identity = network %d, asset %d; want %d, %d",
 			w.networkID, w.assetID, cloneID, cloneID)
+	}
+}
+
+// fakeTxStore stands in for the wallet's transaction store under a history
+// pass: receives are stored as they arrive, and a pass records what its
+// snapshot (ListSinceBlock in syncTxHistory) held.
+type fakeTxStore struct {
+	mtx      sync.Mutex
+	stored   []string
+	recorded map[string]bool
+	passes   int
+	reruns   int
+}
+
+func newFakeTxStore() *fakeTxStore {
+	return &fakeTxStore{recorded: map[string]bool{}}
+}
+
+func (s *fakeTxStore) store(txid string) {
+	s.mtx.Lock()
+	defer s.mtx.Unlock()
+	s.stored = append(s.stored, txid)
+}
+
+func (s *fakeTxStore) snapshot() []string {
+	s.mtx.Lock()
+	defer s.mtx.Unlock()
+	return append([]string(nil), s.stored...)
+}
+
+func (s *fakeTxStore) record(snap []string, rerun bool) {
+	s.mtx.Lock()
+	defer s.mtx.Unlock()
+	for _, txid := range snap {
+		s.recorded[txid] = true
+	}
+	s.passes++
+	if rerun {
+		s.reruns++
+	}
+}
+
+func (s *fakeTxStore) unrecorded() []string {
+	s.mtx.Lock()
+	defer s.mtx.Unlock()
+	var missing []string
+	for _, txid := range s.stored {
+		if !s.recorded[txid] {
+			missing = append(missing, txid)
+		}
+	}
+	return missing
+}
+
+func (s *fakeTxStore) counts() (passes, reruns int) {
+	s.mtx.Lock()
+	defer s.mtx.Unlock()
+	return s.passes, s.reruns
+}
+
+// TestTxHistoryRerunAfterSnapshot: three receives delivered together, as from
+// one electrum status diff, each request a history pass. The first pass is
+// held after its snapshot, which holds only the first receive, while the other
+// two are stored and make their requests. Those requests return at once, and
+// the held pass records both receives in one rerun once released, with no
+// further request such as a new block's. The guard is then free for the next
+// request.
+func TestTxHistoryRerunAfterSnapshot(t *testing.T) {
+	var g rerunGuard
+	s := newFakeTxStore()
+	snapped, release := make(chan struct{}), make(chan struct{})
+	var hold sync.Once
+	pass := func(rerun bool) {
+		snap := s.snapshot()
+		hold.Do(func() {
+			close(snapped)
+			<-release
+		})
+		s.record(snap, rerun)
+	}
+
+	s.store("rx1")
+	first := make(chan struct{})
+	go func() {
+		defer close(first)
+		g.do(tCtx, pass)
+	}()
+	<-snapped
+	for _, txid := range []string{"rx2", "rx3"} {
+		s.store(txid)
+		returned := make(chan struct{})
+		go func() {
+			defer close(returned)
+			g.do(tCtx, pass)
+		}()
+		select {
+		case <-returned:
+		case <-time.After(5 * time.Second):
+			t.Fatalf("the request for %s blocked behind the running pass", txid)
+		}
+	}
+	close(release)
+	<-first
+
+	if missing := s.unrecorded(); len(missing) > 0 {
+		t.Fatalf("receives %v unrecorded after the held pass finished", missing)
+	}
+	if passes, reruns := s.counts(); passes != 2 || reruns != 1 {
+		t.Fatalf("%d passes, %d reruns; want the first pass and one rerun", passes, reruns)
+	}
+
+	s.store("rx4")
+	g.do(tCtx, pass)
+	if missing := s.unrecorded(); len(missing) > 0 {
+		t.Fatalf("receive %v unrecorded by a request made after the guard was released", missing)
+	}
+}
+
+// TestTxHistoryRequestsNotLost: receives stored and requested from many
+// goroutines at once, as blockLoop spawns one per notification, are all
+// recorded by the time every request has returned, and no two passes ever
+// run at once. A request that lands as a pass finishes is either seen by that
+// pass or runs its own. The interleavings that break this, a request recorded
+// just after the running pass checked for one and before it released the
+// guard, or a release that clears a later owner's claim, are narrow, so a
+// guard that allows them fails here in many runs, not every run.
+func TestTxHistoryRequestsNotLost(t *testing.T) {
+	for round := range 5000 {
+		var g rerunGuard
+		s := newFakeTxStore()
+		var active, overlaps atomic.Int32
+		pass := func(rerun bool) {
+			if active.Add(1) > 1 {
+				overlaps.Add(1)
+			}
+			s.record(s.snapshot(), rerun)
+			active.Add(-1)
+		}
+		var wg sync.WaitGroup
+		for i := range 16 {
+			wg.Go(func() {
+				s.store(fmt.Sprintf("rx%d", i))
+				g.do(tCtx, pass)
+			})
+		}
+		wg.Wait()
+		if missing := s.unrecorded(); len(missing) > 0 {
+			t.Fatalf("round %d: receives %v unrecorded after every request returned", round, missing)
+		}
+		if n := overlaps.Load(); n > 0 {
+			t.Fatalf("round %d: %d passes started while another was running", round, n)
+		}
+	}
+}
+
+// TestTxHistoryRerunSkippedAfterCancel: a request made while a pass is running
+// gets no rerun once the context is done, and the guard is free again for the
+// next caller.
+func TestTxHistoryRerunSkippedAfterCancel(t *testing.T) {
+	var g rerunGuard
+	ctx, cancel := context.WithCancel(tCtx)
+	defer cancel()
+	started, release := make(chan struct{}), make(chan struct{})
+	var passes atomic.Int32
+	var hold sync.Once
+	pass := func(bool) {
+		passes.Add(1)
+		hold.Do(func() {
+			close(started)
+			<-release
+		})
+	}
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		g.do(ctx, pass)
+	}()
+	<-started
+	g.do(ctx, pass)
+	cancel()
+	close(release)
+	<-done
+	if n := passes.Load(); n != 1 {
+		t.Fatalf("%d passes after cancellation, want 1", n)
+	}
+	g.do(tCtx, pass)
+	if n := passes.Load(); n != 2 {
+		t.Fatalf("%d passes after a cancelled rerun, want 2; the guard was not released", n)
+	}
+}
+
+// TestTxHistoryCancelledContextRunsNoPass: a request made with a context that
+// is already done runs no pass and leaves the guard free.
+func TestTxHistoryCancelledContextRunsNoPass(t *testing.T) {
+	var g rerunGuard
+	ctx, cancel := context.WithCancel(tCtx)
+	cancel()
+	g.do(ctx, func(bool) { t.Error("pass ran under a cancelled context") })
+	ran := false
+	g.do(tCtx, func(bool) { ran = true })
+	if !ran {
+		t.Fatal("the guard was left busy by a cancelled request")
+	}
+}
+
+// TestTxHistoryGuardReleasedAfterPanic: a pass that panics, with the panic
+// recovered by the caller, leaves the guard free for the next request, and a
+// request recorded during the failed pass does not carry over into it as a
+// rerun.
+func TestTxHistoryGuardReleasedAfterPanic(t *testing.T) {
+	var g rerunGuard
+	recovered := func() (r any) {
+		defer func() { r = recover() }()
+		g.do(tCtx, func(bool) {
+			g.do(tCtx, func(bool) { t.Error("a request made during a pass ran its own pass") })
+			panic("pass failed")
+		})
+		return nil
+	}()
+	if recovered != "pass failed" {
+		t.Fatalf("recovered %v, want the pass's panic", recovered)
+	}
+	var reruns []bool
+	g.do(tCtx, func(rerun bool) { reruns = append(reruns, rerun) })
+	if len(reruns) != 1 || reruns[0] {
+		t.Fatalf("passes after the panic %v, want one first pass", reruns)
 	}
 }

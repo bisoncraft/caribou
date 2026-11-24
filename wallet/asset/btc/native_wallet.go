@@ -263,10 +263,12 @@ type NativeWallet struct {
 	// the transaction arrive as an already-mined import, which the
 	// coalescing NotificationServer reports under a block below
 	// receiveTxLastQuery. The register holds the lowest such height until a
-	// scan actually consumes it, so a trigger skipped by the
-	// syncingTxHistory guard cannot lose the regression.
-	scanFloor        atomic.Uint64
-	syncingTxHistory atomic.Bool
+	// scan actually consumes it, so a scan that fails or stops early cannot
+	// lose the regression.
+	scanFloor atomic.Uint64
+	// txHistorySync runs one syncTxHistory pass at a time and reruns it for
+	// requests made while a pass is running.
+	txHistorySync rerunGuard
 	// updatingPending guards updatePendingTransactions, which is reachable both
 	// from syncTxHistory and from pendingTxLoop; without it the two could
 	// process the same pending tx concurrently and emit duplicate notes.
@@ -1164,23 +1166,89 @@ func (w *NativeWallet) peerLoop(ctx context.Context) {
 
 // syncTxHistory scans for new wallet transactions since the last query and
 // updates pending transactions.
+//
+// A request that arrives while a pass is running is not dropped: the running
+// pass goes again before it returns (see rerunGuard). Receives delivered
+// together, such as several in one electrum status diff, each trigger a
+// request within milliseconds, and a pass that took its ListSinceBlock
+// snapshot before the later ones were stored would otherwise leave them
+// unrecorded until the next block. A rerun scans to the synced height its own
+// sync check reports, since the requests it serves may carry newer tips than
+// this call's. It peeks the scan floor afresh, so a floor lowered during the
+// previous pass, which that pass's clear leaves armed (see clearScanFloor),
+// is scanned from. Callers share the wallet's connection context, under which
+// a rerun runs.
 func (w *NativeWallet) syncTxHistory(ctx context.Context, tip uint64) {
-	if !w.syncingTxHistory.CompareAndSwap(false, true) {
-		return
-	}
-	defer w.syncingTxHistory.Store(false)
-
 	if w.txdb == nil || w.btcw == nil {
 		return
 	}
+	w.txHistorySync.do(ctx, func(rerun bool) {
+		ss, err := w.SyncStatus()
+		if err != nil || ss == nil || !ss.Synced {
+			return
+		}
+		if rerun {
+			tip = ss.Blocks
+		}
+		w.scanNewTransactions(ctx, tip)
+		w.updatePendingTransactions(ctx, tip)
+	})
+}
 
-	ss, err := w.SyncStatus()
-	if err != nil || ss == nil || !ss.Synced {
+// rerunGuard runs one pass of a job at a time without losing a request made
+// while a pass is running. Such a request is recorded for the running pass,
+// which goes again before it releases the guard. Recording a request and
+// releasing the guard happen under one lock, so every request is either seen
+// by the running pass or finds the guard free and runs its own. Requests made
+// during one pass share a single rerun.
+type rerunGuard struct {
+	mtx   sync.Mutex
+	busy  bool
+	rerun bool
+}
+
+// do runs pass if the guard is free, then again for each round of requests
+// made while it ran; rerun is false only for the first pass. If a pass is
+// already running, do records the request for it and returns. No pass starts
+// if ctx is already done, and between passes do stops once it observes the
+// cancellation; a cancellation that races that check can still be followed
+// by one more pass. A pass that panics releases the guard as it unwinds.
+func (g *rerunGuard) do(ctx context.Context, pass func(rerun bool)) {
+	if ctx.Err() != nil {
 		return
 	}
-
-	w.scanNewTransactions(ctx, tip)
-	w.updatePendingTransactions(ctx, tip)
+	g.mtx.Lock()
+	if g.busy {
+		g.rerun = true
+		g.mtx.Unlock()
+		return
+	}
+	g.busy = true
+	g.mtx.Unlock()
+	// The fallback runs only when a pass panics. The normal release below
+	// disarms it under the lock, so it cannot clear the state of an owner
+	// that acquires the guard after that release.
+	released := false
+	defer func() {
+		if released {
+			return
+		}
+		g.mtx.Lock()
+		g.busy, g.rerun = false, false
+		g.mtx.Unlock()
+	}()
+	for rerun := false; ; rerun = true {
+		pass(rerun)
+		g.mtx.Lock()
+		if !g.rerun || ctx.Err() != nil {
+			g.busy, g.rerun = false, false
+			released = true
+			g.mtx.Unlock()
+			return
+		}
+		g.rerun = false
+		g.mtx.Unlock()
+	}
 }
 
 // armScanFloor lowers the pending scan-floor override to h if it is below the
