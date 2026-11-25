@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/bisoncraft/caribou/wallet/utxowallet/bisonwire"
+	"github.com/bisoncraft/caribou/wallet/utxowallet/spv/pushtx"
 	"github.com/btcsuite/btcd/wire"
 )
 
@@ -25,5 +26,34 @@ func TestNeutrinoRefusesDashSpecialTx(t *testing.T) {
 	}
 	if err := (&NeutrinoClient{}).CheckRelay(tx); !errors.Is(err, ErrUnsupportedTx) {
 		t.Fatalf("CheckRelay err = %v, want ErrUnsupportedTx", err)
+	}
+}
+
+// sendErrService is a chain service whose SendTransaction fails with err.
+type sendErrService struct {
+	*mockChainService
+	err error
+}
+
+func (s sendErrService) SendTransaction(*wire.MsgTx) error { return s.err }
+
+// TestNeutrinoSendRawTransactionErrors guards what a failed send says: only a
+// peer's rejection refuses a transaction. Any other failure, such as a stopped
+// broadcaster, is ErrBackendUnavailable, so the wallet keeps a transaction
+// that may be in the mempool.
+func TestNeutrinoSendRawTransactionErrors(t *testing.T) {
+	tx := &bisonwire.Tx{MsgTx: *wire.NewMsgTx(1), Chain: "btc"}
+	send := func(err error) error {
+		c := &NeutrinoClient{CS: sendErrService{&mockChainService{}, err}}
+		_, got := c.SendRawTransaction(tx, false)
+		return got
+	}
+
+	if err := send(pushtx.ErrBroadcasterStopped); !errors.Is(err, ErrBackendUnavailable) {
+		t.Fatalf("a stopped broadcaster: err = %v, want ErrBackendUnavailable", err)
+	}
+	err := send(&pushtx.BroadcastError{Code: pushtx.Invalid, Reason: "bad-txns-inputs-missingorspent"})
+	if err == nil || errors.Is(err, ErrBackendUnavailable) {
+		t.Fatalf("a peer's rejection: err = %v, want a refusal", err)
 	}
 }

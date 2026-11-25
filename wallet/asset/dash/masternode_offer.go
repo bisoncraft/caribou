@@ -419,11 +419,7 @@ func (dw *dashWallet) CancelMasternodeOffer(ctx context.Context, offerID string)
 	// was refused or dropped, and the offer can go: the track loop stops
 	// waiting for what the wallet no longer has.
 	if o.State == masternode.OfferBroadcast {
-		_, err := fw.GetTransaction(o.TxID)
-		switch {
-		case err == nil:
-			return fmt.Errorf("the registration %s was broadcast and the wallet still has it", o.TxID)
-		case !errors.Is(err, wallet.ErrNoTx):
+		if err := registrationGone(fw, o.TxID); err != nil {
 			return err
 		}
 	}
@@ -431,6 +427,41 @@ func (dw *dashWallet) CancelMasternodeOffer(ctx context.Context, offerID string)
 		return err
 	}
 	return mgr.Store().DeleteOffer(id)
+}
+
+// registrationGone returns nil if the wallet no longer has the registration,
+// and an error if it does, or could not tell. The wallet drops an unmined
+// transaction only when its own publish is refused, not when another
+// participant spends their input, so one still stored is sent to the backend
+// again: the wallet drops it if the backend refuses it, and it is still
+// pending if the backend takes it.
+func registrationGone(fw fundingWallet, h chainhash.Hash) error {
+	txid := h.String()
+	res, err := fw.GetTransaction(h)
+	if errors.Is(err, wallet.ErrNoTx) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if res.BlockHash != nil {
+		return fmt.Errorf("the registration %s is mined", txid)
+	}
+	tx := &bisonwire.Tx{Chain: "dash"}
+	if err := tx.Deserialize(bytes.NewReader(res.Summary.Transaction)); err != nil {
+		return err
+	}
+	// A refusal is how a registration that can never mine is found out: the
+	// wallet drops it, and the lookup below says so.
+	_ = fw.PublishBisonTx(tx, registrationLabel)
+	_, err = fw.GetTransaction(h)
+	switch {
+	case errors.Is(err, wallet.ErrNoTx):
+		return nil
+	case err != nil:
+		return err
+	}
+	return fmt.Errorf("the registration %s is pending: it was broadcast, the wallet still has it and the backend did not refuse it", txid)
 }
 
 // usableOffer loads an offer that can still review and sign.

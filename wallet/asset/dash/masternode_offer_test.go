@@ -53,6 +53,11 @@ type fakeFunding struct {
 	// publishErr makes PublishBisonTx fail, as a backend that refuses a
 	// transaction.
 	publishErr error
+	// refuseStored makes PublishBisonTx drop the transaction, as a wallet whose
+	// backend refuses one it already has.
+	refuseStored bool
+	// mined gives the published transactions a block.
+	mined bool
 }
 
 // GetTransaction has what was published and not dropped.
@@ -61,7 +66,15 @@ func (f *fakeFunding) GetTransaction(id chainhash.Hash) (*wallet.GetTransactionR
 	defer f.mu.Unlock()
 	for _, tx := range f.published {
 		if tx.TxHash() == id {
-			return &wallet.GetTransactionResult{}, nil
+			var b bytes.Buffer
+			if err := tx.Serialize(&b); err != nil {
+				return nil, err
+			}
+			res := &wallet.GetTransactionResult{Summary: wallet.TransactionSummary{Transaction: b.Bytes()}}
+			if f.mined {
+				res.BlockHash = &chainhash.Hash{1}
+			}
+			return res, nil
 		}
 	}
 	return nil, wallet.ErrNoTx
@@ -173,6 +186,10 @@ func (f *fakeFunding) PrivKeyForAddress(a btcutil.Address) (*btcec.PrivateKey, e
 	return k, nil
 }
 func (f *fakeFunding) PublishBisonTx(tx *bisonwire.Tx, _ string) error {
+	if f.refuseStored {
+		f.published = slices.DeleteFunc(f.published, func(p *bisonwire.Tx) bool { return p.TxHash() == tx.TxHash() })
+		return errors.New("missing inputs")
+	}
 	if f.publishErr != nil {
 		return f.publishErr
 	}
@@ -579,10 +596,11 @@ func TestMasternodeRegistrationFlow(t *testing.T) {
 	if list, _ := r.dw.MasternodeOffers(ctx); len(list) != 1 {
 		t.Fatalf("%+v", list)
 	}
-	// One the wallet no longer has was dropped, so the offer is not stuck.
-	r.fw.drop(txid)
+	// One the backend refuses when sent again, as when another participant
+	// spent their input, is dropped by the wallet, so the offer is not stuck.
+	r.fw.refuseStored = true
 	if err := r.dw.CancelMasternodeOffer(ctx, o.ID); err != nil {
-		t.Fatalf("cancelling a broadcast offer that was dropped: %v", err)
+		t.Fatalf("cancelling a broadcast offer the backend refuses: %v", err)
 	}
 	if list, _ := r.dw.MasternodeOffers(ctx); len(list) != 0 || len(r.fw.leases) != 0 {
 		t.Fatalf("%+v, %d leases", list, len(r.fw.leases))
@@ -872,4 +890,46 @@ func rawOf(t *testing.T, tx *bisonwire.Tx) []byte {
 		t.Fatal(err)
 	}
 	return b.Bytes()
+}
+
+// A registration is gone only if the wallet does not have it, or drops it when
+// the backend refuses it sent again. One that is mined, or that the wallet
+// keeps because the backend did not refuse it, as when it could not be
+// reached, may still mine, so it is not gone.
+func TestRegistrationGone(t *testing.T) {
+	tx := &bisonwire.Tx{Chain: "dash"}
+	tx.TxIn = []*wire.TxIn{{PreviousOutPoint: wire.OutPoint{Hash: chainhash.Hash{9}}}}
+	tx.TxOut = []*wire.TxOut{{Value: 1, PkScript: []byte{0x51}}}
+	published := func() *fakeFunding {
+		f := newFakeFunding()
+		f.published = append(f.published, tx)
+		return f
+	}
+
+	if err := registrationGone(newFakeFunding(), tx.TxHash()); err != nil {
+		t.Fatalf("a registration the wallet does not have: %v", err)
+	}
+	f := published()
+	f.drop(tx.TxHash().String())
+	if err := registrationGone(f, tx.TxHash()); err != nil {
+		t.Fatalf("a registration the wallet dropped: %v", err)
+	}
+	f = published()
+	f.refuseStored = true
+	if err := registrationGone(f, tx.TxHash()); err != nil {
+		t.Fatalf("a registration the backend refuses: %v", err)
+	}
+	f = published()
+	f.mined = true
+	if err := registrationGone(f, tx.TxHash()); err == nil {
+		t.Fatal("a mined registration is gone")
+	}
+	f = published()
+	f.publishErr = errors.New("backend unavailable")
+	if err := registrationGone(f, tx.TxHash()); err == nil {
+		t.Fatal("a registration the wallet kept after a failed send is gone")
+	}
+	if err := registrationGone(published(), tx.TxHash()); err == nil {
+		t.Fatal("a registration the backend still accepts is gone")
+	}
 }

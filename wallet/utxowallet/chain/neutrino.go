@@ -10,6 +10,7 @@ import (
 	"github.com/bisoncraft/caribou/wallet/utxowallet/netparams"
 	"github.com/bisoncraft/caribou/wallet/utxowallet/spv"
 	"github.com/bisoncraft/caribou/wallet/utxowallet/spv/headerfs"
+	"github.com/bisoncraft/caribou/wallet/utxowallet/spv/pushtx"
 	"github.com/bisoncraft/caribou/wallet/utxowallet/waddrmgr"
 	"github.com/bisoncraft/caribou/wallet/utxowallet/wtxmgr"
 	"github.com/btcsuite/btcd/btcutil"
@@ -260,6 +261,12 @@ func (s *NeutrinoClient) SendRawTransaction(tx *bisonwire.Tx, allowHighFees bool
 	}
 	err := s.CS.SendTransaction(&tx.MsgTx)
 	if err != nil {
+		// Only a peer's rejection says the transaction was refused. Anything
+		// else, such as a stopped broadcaster, does not.
+		var rejection *pushtx.BroadcastError
+		if !errors.As(err, &rejection) {
+			return nil, fmt.Errorf("%w: %v", ErrBackendUnavailable, err)
+		}
 		return nil, s.MapRPCErr(err)
 	}
 	hash := tx.TxHash()

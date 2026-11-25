@@ -4140,6 +4140,13 @@ func (w *Wallet) publishTransaction(tx *bisonwire.Tx) (*chainhash.Hash, error) {
 	case errors.Is(rpcErr, chain.ErrUnsupportedTx):
 		log.Infof("%v: backend cannot relay this transaction", txid)
 		return nil, rpcErr
+
+	// The backend could not be reached, or did not answer, so it did not
+	// refuse the transaction, and the transaction may be in the mempool.
+	// Keep it stored.
+	case errors.Is(rpcErr, chain.ErrBackendUnavailable):
+		log.Infof("%v: backend unavailable: %v", txid, rpcErr)
+		return nil, rpcErr
 	}
 
 	// Log the causing error, even if we know how to handle it.

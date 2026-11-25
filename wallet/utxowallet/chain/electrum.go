@@ -412,6 +412,12 @@ func (c *ElectrumClient) SendRawTransaction(tx *bisonwire.Tx, _ bool) (*chainhas
 		return nil, err
 	}
 	if _, err := c.net.Broadcast(c.ctx, hex); err != nil {
+		// Only a server's reply says the transaction was refused. Anything
+		// else, such as no server or a request that timed out, does not.
+		var reply *electrum.RPCError
+		if !errors.As(err, &reply) {
+			return nil, fmt.Errorf("%w: %v", ErrBackendUnavailable, err)
+		}
 		return nil, c.MapRPCErr(err)
 	}
 	h := tx.TxHash()

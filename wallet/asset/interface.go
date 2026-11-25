@@ -1149,7 +1149,11 @@ type MasternodeOwner interface {
 	// dropped, because its registration can still be broadcast by whoever has it.
 	MasternodeOffers(ctx context.Context) ([]*MasternodeOffer, error)
 	// CancelMasternodeOffer releases an offer's inputs and deletes it. It does
-	// not revoke signatures already given: only spending an input does.
+	// not revoke signatures already given: only spending an input does. It
+	// refuses a broadcast offer whose registration is mined or still accepted
+	// by the backend, since it may mine. It sends one that is pending again
+	// first, so a registration the backend refuses, as when another
+	// participant spent their input, is dropped and the offer can be cancelled.
 	CancelMasternodeOffer(ctx context.Context, offerID string) error
 	// ReviewMasternodeRegistration checks a registration blob against an
 	// offer and returns what it would sign.

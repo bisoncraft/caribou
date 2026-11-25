@@ -727,6 +727,28 @@ func TestElectrumSendRawTransaction(t *testing.T) {
 	}
 }
 
+// TestElectrumSendRawTransactionErrors guards what a failed send says: only a
+// server's reply refuses a transaction. A send that got none, as with no
+// server or a request that timed out, is ErrBackendUnavailable, so the wallet
+// keeps a transaction that may be in the mempool.
+func TestElectrumSendRawTransactionErrors(t *testing.T) {
+	tx := wire.NewMsgTx(wire.TxVersion)
+	tx.AddTxIn(&wire.TxIn{PreviousOutPoint: wire.OutPoint{Index: 0}})
+	tx.AddTxOut(&wire.TxOut{Value: 100, PkScript: []byte{0x51}})
+	btx := &bisonwire.Tx{MsgTx: *tx, Chain: "btc"}
+
+	c, stub := makeClient(t, 1)
+	stub.bcastErr = context.DeadlineExceeded
+	if _, err := c.SendRawTransaction(btx, false); !errors.Is(err, ErrBackendUnavailable) {
+		t.Fatalf("a send with no answer: err = %v, want ErrBackendUnavailable", err)
+	}
+	stub.bcastErr = &electrum.RPCError{Code: 1, Message: "bad-txns-inputs-missingorspent"}
+	_, err := c.SendRawTransaction(btx, false)
+	if err == nil || errors.Is(err, ErrBackendUnavailable) {
+		t.Fatalf("a server's refusal: err = %v, want a refusal", err)
+	}
+}
+
 // TestElectrumSendRawTransactionDashSpecial guards that a Dash special
 // transaction is broadcast with its type and extra payload. Without them the
 // server sees a different transaction and rejects it.

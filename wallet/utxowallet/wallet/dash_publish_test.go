@@ -251,3 +251,24 @@ func TestResendUnminedTxsKeepsTxWhenBackendCannotRelay(t *testing.T) {
 		t.Fatal("resend deleted a tx the backend only could not relay")
 	}
 }
+
+// TestPublishBisonTxKeepsTxWhenBackendUnavailable guards a publish the backend
+// never answered: the tx may be in the mempool, so it is not evidence the tx
+// is invalid, and the wallet must not delete it and stop counting its inputs
+// as spent.
+func TestPublishBisonTxKeepsTxWhenBackendUnavailable(t *testing.T) {
+	rec := &publishRecorder{mockChainClient: &mockChainClient{}}
+	w := testDashWallet(t, rec)
+	tx := decodeDashSpecialTx(t)
+	if err := w.PublishBisonTx(tx, ""); err != nil {
+		t.Fatalf("PublishBisonTx: %v", err)
+	}
+
+	rec.err = chain.ErrBackendUnavailable
+	if err := w.PublishBisonTx(tx, ""); !errors.Is(err, chain.ErrBackendUnavailable) {
+		t.Fatalf("err = %v, want chain.ErrBackendUnavailable", err)
+	}
+	if storedTx(t, w, tx.TxHash()) == nil {
+		t.Fatal("an unreachable backend deleted the stored tx")
+	}
+}
