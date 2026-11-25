@@ -160,9 +160,9 @@ func TestAFundingFetchThatLosesTheConnection(t *testing.T) {
 // The state of an output that waits for its funding transaction is kept
 // across a failure of the connection. An unknown funding transaction leaves
 // the output unrecorded and its fetch deferred. A later fetch that loses the
-// connection changes neither, and its error is reported beside the
-// unrecorded output. While the requests for the transparent addresses are put
-// off, blocks are scanned and no address or funding request is made. Once
+// connection changes neither, and its error is reported in one error with
+// the unrecorded output. While the requests for the transparent addresses are
+// put off, blocks are scanned and no address or funding request is made. Once
 // the output has left the listing, nothing waits.
 func TestAnUnrecordedOutputOutlastsALostConnection(t *testing.T) {
 	srv := newFakeLwd(t, 150)
@@ -206,16 +206,16 @@ func TestAnUnrecordedOutputOutlastsALostConnection(t *testing.T) {
 		return srv.callCount("GetAddressUtxosStream") + srv.callCount("GetTaddressTxids") + srv.callCount("GetTransaction")
 	}
 
-	// The server does not know the funding transaction.
+	// The server does not know the funding transaction. The unrecorded
+	// output is reported alone.
 	cycle(150)
 	waiting("an unknown funding transaction")
-	if st.TransparentErr != nil {
+	if !errors.Is(st.TransparentErr, ErrOutputUnrecorded) || isServerError(st.TransparentErr) {
 		t.Fatalf("TransparentErr: %v", st.TransparentErr)
 	}
 
-	// The fetch is due again, and the connection fails during it. The sync
-	// loop reports unrecordedErr as SyncStatus.Err of a synced wallet, so
-	// the two errors are reported together.
+	// The fetch is due again, and the connection fails during it. The two
+	// errors are reported as one.
 	now = now.Add(2 * time.Minute)
 	srv.set(func(s *fakeLwd) {
 		s.fail["GetTransaction"] = status.Error(codes.Unavailable, "the connection was lost")
@@ -227,8 +227,11 @@ func TestAnUnrecordedOutputOutlastsALostConnection(t *testing.T) {
 		t.Fatalf("%d fetches of the funding transaction, want 1", n)
 	}
 	waiting("a lost connection")
-	if !isConnectionError(st.TransparentErr) {
+	if !isConnectionError(st.TransparentErr) || !errors.Is(st.TransparentErr, ErrOutputUnrecorded) {
 		t.Fatalf("TransparentErr: %v", st.TransparentErr)
+	}
+	if st.Err != nil {
+		t.Fatalf("Err: %v", st.Err)
 	}
 
 	// Within the delay of the transparent requests, blocks are scanned and
@@ -241,8 +244,8 @@ func TestAnUnrecordedOutputOutlastsALostConnection(t *testing.T) {
 		t.Fatalf("%d transparent requests were made within their delay", n)
 	}
 	waiting("the delay")
-	if st.TransparentErr == nil {
-		t.Fatal("the error was cleared within the delay")
+	if !isConnectionError(st.TransparentErr) || !errors.Is(st.TransparentErr, ErrOutputUnrecorded) {
+		t.Fatalf("TransparentErr within the delay: %v", st.TransparentErr)
 	}
 
 	// The delay has passed, the server answers, and the output has left
@@ -263,6 +266,32 @@ func TestAnUnrecordedOutputOutlastsALostConnection(t *testing.T) {
 	}
 }
 
+// SyncStatus.TransparentErr is the failure of an update, the outputs that
+// could not be recorded, or both in one error that matches each and reads as
+// one line that begins with the failure.
+func TestTransparentErrCombines(t *testing.T) {
+	p := new(processor)
+	if err := p.transparentErr(nil); err != nil {
+		t.Fatalf("nothing to report: %v", err)
+	}
+	var failed error = &serverError{"GetAddressUtxosStream", status.Error(codes.Unavailable, "the connection was lost")}
+	if err := p.transparentErr(failed); err != failed {
+		t.Fatalf("a failure alone: %v, want the failure itself", err)
+	}
+	p.unrecorded = map[string]error{"account": wrapf(ErrOutputUnrecorded, "1 of the 2 unspent outputs")}
+	alone := p.transparentErr(nil)
+	if !errors.Is(alone, ErrOutputUnrecorded) || isServerError(alone) {
+		t.Fatalf("an unrecorded output alone: %v", alone)
+	}
+	both := p.transparentErr(failed)
+	if !errors.Is(both, ErrOutputUnrecorded) || !errors.Is(both, ErrServerUnreachable) || !isConnectionError(both) {
+		t.Fatalf("both: %v", both)
+	}
+	if want := failed.Error() + "; " + alone.Error(); both.Error() != want {
+		t.Fatalf("both read %q, want %q", both.Error(), want)
+	}
+}
+
 // waitCycles waits until n more sync cycles have started. Each cycle asks
 // the server for its chain tip once.
 func waitCycles(t *testing.T, e *env, n int) {
@@ -276,7 +305,8 @@ func waitCycles(t *testing.T, e *env, n int) {
 func waitUnrecorded(t *testing.T, e *env, want bool) {
 	t.Helper()
 	e.statuses.wait(t, fmt.Sprintf("synced with an unrecorded output: %t", want), func(s SyncStatus) bool {
-		return s.State == SyncSynced && errors.Is(s.Err, ErrOutputUnrecorded) == want && (want || s.Err == nil)
+		return s.State == SyncSynced && s.Err == nil &&
+			errors.Is(s.TransparentErr, ErrOutputUnrecorded) == want && (want || s.TransparentErr == nil)
 	})
 }
 

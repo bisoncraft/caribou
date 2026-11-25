@@ -40,10 +40,11 @@ type cache struct {
 	peers int
 	// tipEmitted is the tip of the last TipChange.
 	tipEmitted uint32
-	// errText is the text of the last sync error logged, and unrecorded is
-	// set while the status reports an unrecorded output.
-	errText    string
-	unrecorded bool
+	// errText is the text of the last sync error logged.
+	errText string
+	// warning is the balance warning last reported to core, nil when there
+	// is none.
+	warning *asset.BalanceWarning
 }
 
 // reset forgets everything, for a database that was closed or opened.
@@ -59,7 +60,7 @@ func (c *cache) reset() {
 	c.peers = -1
 	c.tipEmitted = 0
 	c.errText = ""
-	c.unrecorded = false
+	c.warning = nil
 }
 
 // connected starts the peer reports of a new connection.

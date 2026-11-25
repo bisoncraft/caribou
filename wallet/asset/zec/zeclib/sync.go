@@ -79,18 +79,21 @@ type SyncStatus struct {
 	RecoveryProgress Ratio
 	Recovering       bool
 	// Err is the error that ended the last sync attempt. It is nil after
-	// an attempt that succeeded, except for ErrOutputUnrecorded, which an
-	// attempt that succeeded reports together with SyncSynced. The wallet
-	// retries on its own whatever the error is. ErrWrongNetwork,
-	// ErrReorgTooDeep and an ErrConsensusBranch that every server gives do
-	// not go away without intervention. Err does not say by itself that the
-	// server is lost: State does.
+	// an attempt that succeeded. The wallet retries on its own whatever the
+	// error is. ErrWrongNetwork, ErrReorgTooDeep and an ErrConsensusBranch
+	// that every server gives do not go away without intervention. Err does
+	// not say by itself that the server is lost: State does.
 	Err error
-	// TransparentErr is the error of the last failed attempt to update the
-	// wallet's transparent addresses: to fetch their history and their
-	// unspent outputs. It is nil once an attempt has succeeded. While it is
-	// set, the transparent balance and the addresses the wallet watches can
-	// be out of date. It does not end a sync attempt or change State: a
+	// TransparentErr says why the wallet's transparent funds can be out of
+	// date. It is set by the last update of the wallet's transparent
+	// addresses, which fetches their history and their unspent outputs:
+	// the error of an update that failed, an ErrOutputUnrecorded when the
+	// server lists unspent outputs that the wallet could not record, or
+	// both in one error that errors.Is and errors.As match each of. It is
+	// nil once an update has succeeded and recorded every output. While it
+	// is set, the transparent balance and the addresses the wallet watches
+	// can be out of date, and with ErrOutputUnrecorded the balance is
+	// missing outputs. It does not end a sync attempt or change State: a
 	// wallet whose server fails these requests keeps scanning blocks and
 	// can be SyncSynced.
 	TransparentErr error
@@ -287,7 +290,7 @@ type processor struct {
 	recordedUTXOs map[string]struct{}
 	// unrecorded holds, by account ID, why some of the account's unspent
 	// outputs could not be recorded in its last query. It is reported in
-	// SyncStatus.Err after a cycle that otherwise succeeded.
+	// SyncStatus.TransparentErr.
 	unrecorded map[string]error
 
 	// rebroadcasts holds the rebroadcast state of the transactions in the
@@ -400,10 +403,9 @@ func (p *processor) run(ctx context.Context) {
 		default:
 			failures = 0
 			p.chainErrors = 0
-			unrecorded := p.unrecordedErr()
 			p.update(func(s *SyncStatus) {
 				s.State = SyncSynced
-				s.Err = unrecorded
+				s.Err = nil
 			})
 			wait = jitter(p.opts.pollInterval)
 		}
@@ -582,9 +584,11 @@ func (p *processor) syncTip(ctx context.Context) (tip *walletrpc.BlockID, rewoun
 // SyncStatus.TransparentErr, and the requests are made again after a delay
 // that grows with each consecutive failure. Without the delay a server that
 // keeps failing them would be sent every address of the wallet at every
-// poll. The error that syncAddresses returns is one that ends the attempt: a
-// failed check of the server, an error of the wallet database, or a
-// cancelled context.
+// poll. Unspent outputs that could not be recorded are reported there too,
+// with or without a failure. The error that syncAddresses returns is one
+// that ends the attempt: a failed check of the server, an error of the
+// wallet database, or a cancelled context. The status then keeps the
+// TransparentErr of the update before.
 func (p *processor) syncAddresses(ctx context.Context, tip *walletrpc.BlockID) error {
 	if p.opts.now().Before(p.transparentRetryAt) {
 		return nil
@@ -623,8 +627,26 @@ func (p *processor) syncAddresses(ctx context.Context, tip *walletrpc.BlockID) e
 		p.log.Warnf("The requests for the transparent addresses failed and are put off for %s: %v",
 			wait.Round(time.Millisecond), failed)
 	}
-	p.update(func(s *SyncStatus) { s.TransparentErr = failed })
+	reported := p.transparentErr(failed)
+	p.update(func(s *SyncStatus) { s.TransparentErr = reported })
 	return nil
+}
+
+// transparentErr returns the error that SyncStatus.TransparentErr reports
+// after an update of the transparent addresses: failed, the failure of the
+// update if there was one, the outputs that could not be recorded, or both
+// in one error. The failure comes first, so the text and the gRPC status of
+// the combined error are those of the failure.
+func (p *processor) transparentErr(failed error) error {
+	unrecorded := p.unrecordedErr()
+	switch {
+	case failed == nil:
+		return unrecorded
+	case unrecorded == nil:
+		return failed
+	default:
+		return fmt.Errorf("%w; %w", failed, unrecorded)
+	}
 }
 
 // syncBlocks scans the blocks the wallet wants scanned up to the server's

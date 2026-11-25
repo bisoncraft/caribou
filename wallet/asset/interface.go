@@ -962,6 +962,36 @@ type MinimumDepositer interface {
 	MinimumDeposit() uint64
 }
 
+// BalanceWarningRoute is the route of the custom wallet note that announces
+// a change of a BalanceWarner's warning.
+const BalanceWarningRoute = "balanceWarning"
+
+// BalanceWarning says that the balance a wallet reports can be missing funds
+// while the wallet is connected and synced, and why.
+type BalanceWarning struct {
+	// Code names the condition. The wallet's package defines it, and a
+	// front end keys the text it shows on it.
+	Code string `json:"code"`
+	// Detail is the wallet's own account of the cause, in English, for
+	// display beside that text.
+	Detail string `json:"detail"`
+}
+
+// BalanceWarner is implemented by wallets that read a part of their funds in
+// a way that can fail while the rest of the wallet stays synced, so that a
+// synced wallet can report a balance that is missing funds. Core includes
+// the warning in the wallet's state.
+type BalanceWarner interface {
+	// BalanceWarning returns the wallet's cached warning, nil when there is
+	// none. It does not query the network. While it is connected, the
+	// wallet announces every change through a custom wallet note with the
+	// route BalanceWarningRoute, whose payload is the new *BalanceWarning,
+	// nil when the warning has ended. A warning ends with its connection,
+	// with a note. A wallet that is closed without being disconnected
+	// first drops its warning without one.
+	BalanceWarning() *BalanceWarning
+}
+
 // LiveReconfigurer is a wallet that can possibly handle a reconfiguration
 // without the need for re-initialization.
 type LiveReconfigurer interface {

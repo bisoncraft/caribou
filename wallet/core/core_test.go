@@ -330,6 +330,7 @@ type TXCWallet struct {
 	trustlineCalls int
 	trustlineState *asset.TrustlineState
 	minDeposit     uint64
+	balanceWarning *asset.BalanceWarning
 
 	// connectHook, when non-nil, is called at the top of Connect. It lets a
 	// test park a connection mid-flight. Set it before the Connect it should
@@ -356,6 +357,7 @@ var _ asset.Accelerator = (*TXCWallet)(nil)
 var _ asset.Withdrawer = (*TXCWallet)(nil)
 var _ asset.TrustlineEstablisher = (*TXCWallet)(nil)
 var _ asset.MinimumDepositer = (*TXCWallet)(nil)
+var _ asset.BalanceWarner = (*TXCWallet)(nil)
 
 func (w *TXCWallet) TrustlineStatus() *asset.TrustlineState {
 	if w.trustlineState == nil {
@@ -371,6 +373,10 @@ func (w *TXCWallet) EstablishTrustline() (string, error) {
 
 func (w *TXCWallet) MinimumDeposit() uint64 {
 	return w.minDeposit
+}
+
+func (w *TXCWallet) BalanceWarning() *asset.BalanceWarning {
+	return w.balanceWarning
 }
 
 func newTWallet(assetID uint32) (*xcWallet, *TXCWallet) {

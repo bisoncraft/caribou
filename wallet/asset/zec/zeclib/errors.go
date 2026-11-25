@@ -109,13 +109,13 @@ var (
 	// reorganized below the lowest height the wallet can rewind to. The
 	// wallet database has to be rebuilt from the seed.
 	ErrReorgTooDeep = errors.New("zeclib: chain reorganization is deeper than the wallet can rewind")
-	// ErrOutputUnrecorded is reported in SyncStatus, with SyncSynced, when
-	// an unspent transparent output the server lists could not be
-	// recorded: its funding transaction could not be fetched or stored, or
-	// the server's output does not match the transaction. The output is in
-	// no balance until it is recorded. The wallet asks again in every
-	// cycle, except while the requests for the transparent addresses are
-	// put off after a failure (see SyncStatus.TransparentErr).
+	// ErrOutputUnrecorded is reported in SyncStatus.TransparentErr when an
+	// unspent transparent output the server lists could not be recorded:
+	// its funding transaction could not be fetched or stored, or the
+	// server's output does not match the transaction. The output is in no
+	// balance until it is recorded. The wallet asks again in every cycle,
+	// except while the requests for the transparent addresses are put off
+	// after a failure, which TransparentErr then reports in the same error.
 	ErrOutputUnrecorded = errors.New("zeclib: an unspent transparent output could not be recorded")
 )
 

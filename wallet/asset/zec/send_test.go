@@ -55,7 +55,7 @@ func TestSendGates(t *testing.T) {
 	}
 	// Synced with an error in the status is synced.
 	e.o.latest().set(func(b *fakeBackend) {
-		b.status = zeclib.SyncStatus{State: zeclib.SyncSynced, ChainTip: 300, Err: zeclib.ErrOutputUnrecorded}
+		b.status = zeclib.SyncStatus{State: zeclib.SyncSynced, ChainTip: 300, TransparentErr: zeclib.ErrOutputUnrecorded}
 	})
 	if _, err := e.w.Send("ufake-other", 1_000, feeRate); err != nil {
 		t.Errorf("synced with an unrecorded output: %v", err)

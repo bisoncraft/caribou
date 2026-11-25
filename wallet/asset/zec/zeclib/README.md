@@ -197,10 +197,11 @@ another height was moved by a reorganization after the listing, and its
 outputs wait for the next query. Each output is checked against the stored
 transaction, by index, script and value, and one the transaction does not
 have is not recorded. An output that waits is in no balance, and
-`SyncStatus.Err` reports it with `ErrOutputUnrecorded` after each cycle
-until it is recorded. The server is asked about it again in every cycle,
-except while the requests for the transparent addresses are put off after a
-failure.
+`SyncStatus.TransparentErr` reports it with `ErrOutputUnrecorded` until it
+is recorded, in one error with a failure of the requests when both apply.
+`SyncStatus.Err` is then left to the error that ended a cycle. The server is
+asked about the output again in every cycle, except while the requests for
+the transparent addresses are put off after a failure.
 
 Limits:
 

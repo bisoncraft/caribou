@@ -122,6 +122,7 @@ var (
 	_ asset.NewAddresser   = (*zecWallet)(nil)
 	_ asset.WalletRestorer = (*zecWallet)(nil)
 	_ asset.ReceiverLister = (*zecWallet)(nil)
+	_ asset.BalanceWarner  = (*zecWallet)(nil)
 )
 
 func newWallet(cfg *asset.WalletConfig, log util.Logger, network util.Network) (*zecWallet, error) {
@@ -386,6 +387,7 @@ func (w *zecWallet) connContext() context.Context {
 // is closed. It runs every handler once at the start, so the state is read
 // whatever the callbacks did before it began.
 func (w *zecWallet) work(ctx context.Context, closed chan struct{}) {
+	defer w.endWarning()
 	w.cache.connected()
 	w.handleStatus()
 	w.refresh()
