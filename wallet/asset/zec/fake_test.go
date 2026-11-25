@@ -49,6 +49,12 @@ type fakeBackend struct {
 	marginAsked      []time.Duration
 	createParams     []zeclib.AccountParams
 	createErr        error
+	// heightCtx and createCtx are the contexts of the last HeightForTime
+	// and CreateAccount.
+	heightCtx, createCtx context.Context
+	// createWait, if set, is closed when CreateAccount begins, which then
+	// waits for its context to be done and returns the context's error.
+	createWait chan struct{}
 
 	history []zeclib.TxRecord
 	pages   int
@@ -163,7 +169,16 @@ func (b *fakeBackend) SyncStatus() zeclib.SyncStatus {
 	return b.status
 }
 
-func (b *fakeBackend) CreateAccount(_ context.Context, p *zeclib.AccountParams) (*zeclib.Account, error) {
+func (b *fakeBackend) CreateAccount(ctx context.Context, p *zeclib.AccountParams) (*zeclib.Account, error) {
+	b.mtx.Lock()
+	b.createCtx = ctx
+	wait := b.createWait
+	b.mtx.Unlock()
+	if wait != nil {
+		close(wait)
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
 	b.mtx.Lock()
 	defer b.mtx.Unlock()
 	params := *p
@@ -192,9 +207,10 @@ func (b *fakeBackend) IsSeedRelevant(seed []byte) (bool, error) {
 	return bytes.Equal(seed, b.relevant), nil
 }
 
-func (b *fakeBackend) HeightForTime(_ context.Context, t time.Time, margin time.Duration) (uint32, error) {
+func (b *fakeBackend) HeightForTime(ctx context.Context, t time.Time, margin time.Duration) (uint32, error) {
 	b.mtx.Lock()
 	defer b.mtx.Unlock()
+	b.heightCtx = ctx
 	b.birthdayAsked = append(b.birthdayAsked, t)
 	b.marginAsked = append(b.marginAsked, margin)
 	return b.heightForTime, b.heightForTimeErr
@@ -471,7 +487,7 @@ func newEnv(t *testing.T) *env {
 	t.Helper()
 	o := installOpener(t)
 	e := &env{t: t, dir: t.TempDir(), o: o, notes: newNotes(), log: &logRecorder{}}
-	if err := (&Driver{}).Create(&asset.CreateWalletParams{
+	if err := (&Driver{}).Create(t.Context(), &asset.CreateWalletParams{
 		Type: walletTypeNative, Seed: testEntropy, Pass: testPW, DataDir: e.dir, Net: util.Simnet,
 	}); err != nil {
 		t.Fatalf("Create: %v", err)

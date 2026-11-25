@@ -108,7 +108,7 @@ func tConnectedWallet(t *testing.T) (*ExchangeWallet, context.Context) {
 	logger := util.NewLogger("XMRTEST", util.LevelDebug, os.Stdout)
 
 	drv := &Driver{}
-	err := drv.Create(&asset.CreateWalletParams{
+	err := drv.Create(t.Context(), &asset.CreateWalletParams{
 		Type:     walletTypeNative,
 		Seed:     seed,
 		Pass:     pass,

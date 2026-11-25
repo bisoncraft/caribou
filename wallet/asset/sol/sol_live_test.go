@@ -94,7 +94,7 @@ func createHarnessWallet(t *testing.T) (*Wallet, []byte) {
 		t.Fatal(err)
 	}
 	drv := &Driver{}
-	if err := drv.Create(&asset.CreateWalletParams{
+	if err := drv.Create(t.Context(), &asset.CreateWalletParams{
 		Type:    walletTypeRPC,
 		Seed:    seed,
 		Pass:    pw,

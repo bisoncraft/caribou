@@ -65,7 +65,7 @@ func createTestWallet(t *testing.T) (*NearWallet, []byte) {
 	}
 
 	drv := &Driver{}
-	err := drv.Create(&asset.CreateWalletParams{
+	err := drv.Create(t.Context(), &asset.CreateWalletParams{
 		Type:     walletTypeRPC,
 		Seed:     seed,
 		Pass:     pw,
@@ -386,7 +386,7 @@ func TestLiveCreateExists(t *testing.T) {
 	pw := make([]byte, 32)
 	rand.Read(pw)
 
-	err = drv.Create(&asset.CreateWalletParams{
+	err = drv.Create(t.Context(), &asset.CreateWalletParams{
 		Type:    walletTypeRPC,
 		Seed:    seed,
 		Pass:    pw,
@@ -430,7 +430,7 @@ func TestLiveCreateExists(t *testing.T) {
 
 	// Create again with same seed — should get same address.
 	dir2 := t.TempDir()
-	err = drv.Create(&asset.CreateWalletParams{
+	err = drv.Create(t.Context(), &asset.CreateWalletParams{
 		Type:    walletTypeRPC,
 		Seed:    seed,
 		Pass:    pw,
@@ -465,7 +465,7 @@ func TestLiveCreateExists(t *testing.T) {
 
 	// Wrong password should fail to unlock.
 	dir3 := t.TempDir()
-	drv.Create(&asset.CreateWalletParams{
+	drv.Create(t.Context(), &asset.CreateWalletParams{
 		Type: walletTypeRPC, Seed: seed, Pass: pw, DataDir: dir3, Net: util.Simnet, Logger: tLogger,
 	})
 	w3, _ := drv.Open(&asset.WalletConfig{

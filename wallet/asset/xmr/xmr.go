@@ -160,7 +160,7 @@ func (d *Driver) Exists(walletType, dataDir string, settings map[string]string, 
 
 // Create creates a new Monero wallet from seed.
 // The seed should be 32 bytes which is used as the Monero spend key.
-func (d *Driver) Create(params *asset.CreateWalletParams) error {
+func (d *Driver) Create(_ context.Context, params *asset.CreateWalletParams) error {
 	if params.Type != walletTypeNative {
 		return fmt.Errorf("unknown wallet type %q", params.Type)
 	}

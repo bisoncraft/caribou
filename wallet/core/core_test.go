@@ -3201,7 +3201,7 @@ func (d *tSeededDriver) Exists(_, dataDir string, _ map[string]string, _ util.Ne
 	return err == nil, err
 }
 
-func (d *tSeededDriver) Create(params *asset.CreateWalletParams) error {
+func (d *tSeededDriver) Create(_ context.Context, params *asset.CreateWalletParams) error {
 	d.creates++
 	if d.createHook != nil {
 		d.createHook()

@@ -338,7 +338,7 @@ func TestUserFacingErrors(t *testing.T) {
 				}
 				return be, err
 			}
-			return (&Driver{}).Create(createParams(t.TempDir(), util.Mainnet, 1_800_000_000))
+			return (&Driver{}).Create(t.Context(), createParams(t.TempDir(), util.Mainnet, 1_800_000_000))
 		},
 		want: "no Zcash server could be reached; check the network connection and the lightwalletd server setting",
 		is:   zeclib.ErrServerUnreachable,
@@ -346,7 +346,7 @@ func TestUserFacingErrors(t *testing.T) {
 		name: "Create: a wallet exists",
 		run: func(t *testing.T) error {
 			e := newEnv(t)
-			return (&Driver{}).Create(createParams(e.dir, util.Simnet, 0))
+			return (&Driver{}).Create(t.Context(), createParams(e.dir, util.Simnet, 0))
 		},
 		want: "a Zcash wallet already exists",
 		is:   errWalletExists,

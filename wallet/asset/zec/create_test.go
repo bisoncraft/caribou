@@ -5,6 +5,7 @@ package zec
 
 import (
 	"bytes"
+	"context"
 	"encoding/hex"
 	"errors"
 	"os"
@@ -83,7 +84,7 @@ func TestCreateBirthday(t *testing.T) {
 				}
 				return be, err
 			}
-			if err := (&Driver{}).Create(createParams(dir, tc.net, tc.birthday)); err != nil {
+			if err := (&Driver{}).Create(t.Context(), createParams(dir, tc.net, tc.birthday)); err != nil {
 				t.Fatalf("Create: %v", err)
 			}
 			b := o.latest()
@@ -115,6 +116,80 @@ func TestCreateBirthday(t *testing.T) {
 	}
 }
 
+// The calls Create makes to the servers run under the context Create is
+// given, bounded by createTimeout.
+func TestCreateContext(t *testing.T) {
+	o := installOpener(t)
+	type ctxKey struct{}
+	ctx := context.WithValue(t.Context(), ctxKey{}, "create")
+	birthday := uint64(time.Now().Add(-time.Minute).Unix())
+	if err := (&Driver{}).Create(ctx, createParams(t.TempDir(), util.Mainnet, birthday)); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	b := o.latest()
+	for name, got := range map[string]context.Context{"HeightForTime": b.heightCtx, "CreateAccount": b.createCtx} {
+		if got == nil || got.Value(ctxKey{}) != "create" {
+			t.Errorf("%s did not run under the context given to Create", name)
+			continue
+		}
+		deadline, bounded := got.Deadline()
+		if !bounded || time.Until(deadline) > createTimeout {
+			t.Errorf("%s is not bounded by createTimeout: %v, %t", name, deadline, bounded)
+		}
+	}
+}
+
+// A Create whose context is cancelled while it waits for a server returns
+// with the context's error, leaves no wallet, and does not prevent a later
+// Create.
+func TestCreateCancelled(t *testing.T) {
+	o := installOpener(t)
+	dir := t.TempDir()
+	d := &Driver{}
+	prev := openBackend
+	started := make(chan struct{})
+	openBackend = func(cfg *zeclib.Config, seed []byte) (backend, error) {
+		be, err := prev(cfg, seed)
+		if err == nil {
+			be.(*fakeBackend).createWait = started
+		}
+		return be, err
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	result := make(chan error, 1)
+	go func() { result <- d.Create(ctx, createParams(dir, util.Simnet, 0)) }()
+	select {
+	case <-started:
+	case err := <-result:
+		t.Fatalf("Create returned before it reached the server: %v", err)
+	case <-time.After(10 * time.Second):
+		t.Fatal("Create did not reach the server")
+	}
+	cancel()
+	select {
+	case err := <-result:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("a cancelled Create: %v, want the context's error", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("Create did not return after its context was cancelled")
+	}
+	if !o.latest().isClosed() {
+		t.Error("the database was left open")
+	}
+	if exists, err := d.Exists(walletTypeNative, dir, nil, util.Simnet); err != nil || exists {
+		t.Fatalf("Exists after a cancelled Create: %t, %v", exists, err)
+	}
+	openBackend = prev
+	if err := d.Create(t.Context(), createParams(dir, util.Simnet, 0)); err != nil {
+		t.Fatalf("Create after a cancelled one: %v", err)
+	}
+	if exists, err := d.Exists(walletTypeNative, dir, nil, util.Simnet); err != nil || !exists {
+		t.Fatalf("Exists: %t, %v", exists, err)
+	}
+}
+
 // The seed file is written last, so an interrupted Create leaves no wallet,
 // and the next Create starts over from what it left.
 func TestCreateFileOrder(t *testing.T) {
@@ -130,7 +205,7 @@ func TestCreateFileOrder(t *testing.T) {
 		}
 		return be, err
 	}
-	if err := d.Create(createParams(dir, util.Simnet, 0)); !errors.Is(err, failing) {
+	if err := d.Create(t.Context(), createParams(dir, util.Simnet, 0)); !errors.Is(err, failing) {
 		t.Fatalf("Create with a failing account: %v", err)
 	}
 	if exists, err := d.Exists(walletTypeNative, dir, nil, util.Simnet); err != nil || exists {
@@ -146,7 +221,7 @@ func TestCreateFileOrder(t *testing.T) {
 		}
 	}
 	openBackend = prev
-	if err := d.Create(createParams(dir, util.Simnet, 0)); err != nil {
+	if err := d.Create(t.Context(), createParams(dir, util.Simnet, 0)); err != nil {
 		t.Fatalf("Create over the leftovers: %v", err)
 	}
 	for _, suffix := range []string{"", "-journal", "-wal", "-shm"} {
@@ -157,7 +232,7 @@ func TestCreateFileOrder(t *testing.T) {
 	if exists, err := d.Exists(walletTypeNative, dir, nil, util.Simnet); err != nil || !exists {
 		t.Fatalf("Exists: %t, %v", exists, err)
 	}
-	if err := d.Create(createParams(dir, util.Simnet, 0)); err == nil {
+	if err := d.Create(t.Context(), createParams(dir, util.Simnet, 0)); err == nil {
 		t.Error("Create over an existing wallet succeeded")
 	}
 }
@@ -167,17 +242,17 @@ func TestCreateArguments(t *testing.T) {
 	d := &Driver{}
 	p := createParams(t.TempDir(), util.Simnet, 0)
 	p.Type = "rpc"
-	if err := d.Create(p); err == nil {
+	if err := d.Create(t.Context(), p); err == nil {
 		t.Error("an unknown type")
 	}
 	p = createParams(t.TempDir(), util.Simnet, 0)
 	p.Seed = make([]byte, 64)
-	if err := d.Create(p); err == nil {
+	if err := d.Create(t.Context(), p); err == nil {
 		t.Error("a 64-byte seed")
 	}
 	p = createParams(t.TempDir(), util.Simnet, 0)
 	p.Pass = []byte("short")
-	if err := d.Create(p); err == nil {
+	if err := d.Create(t.Context(), p); err == nil {
 		t.Error("a short password")
 	}
 	if _, err := d.Exists("rpc", t.TempDir(), nil, util.Simnet); err == nil {

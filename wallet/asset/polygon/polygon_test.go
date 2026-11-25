@@ -108,13 +108,13 @@ func TestDriverCreate(t *testing.T) {
 		Net:     util.Testnet,
 		Logger:  util.Disabled,
 	}
-	if err := drv.Create(params); err != nil {
+	if err := drv.Create(t.Context(), params); err != nil {
 		t.Fatalf("Create error: %v", err)
 	}
 
 	bad := *params
 	bad.Net = util.Network(99)
-	if err := drv.Create(&bad); err == nil {
+	if err := drv.Create(t.Context(), &bad); err == nil {
 		t.Fatal("Create accepted unknown network")
 	}
 }

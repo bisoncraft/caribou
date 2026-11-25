@@ -188,7 +188,7 @@ func TestSharesHyperCoreAddress(t *testing.T) {
 	wantAddr := crypto.PubkeyToAddress(priv.PublicKey)
 
 	tmpDir := t.TempDir()
-	if err := (&Driver{}).Create(&asset.CreateWalletParams{
+	if err := (&Driver{}).Create(t.Context(), &asset.CreateWalletParams{
 		Type:     walletTypeRPC,
 		Seed:     seed,
 		Pass:     pass,

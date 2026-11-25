@@ -111,7 +111,7 @@ func (d *Driver) Exists(walletType, dataDir string, _ map[string]string, _ util.
 	return err == nil, err
 }
 
-func (d *Driver) Create(params *asset.CreateWalletParams) error {
+func (d *Driver) Create(_ context.Context, params *asset.CreateWalletParams) error {
 	if params.Type != "rpc" {
 		return fmt.Errorf("unknown wallet type %q", params.Type)
 	}

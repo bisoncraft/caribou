@@ -24,7 +24,7 @@ func TestWalletUsesConfiguredProxy(t *testing.T) {
 		t.Fatal(err)
 	}
 	settings := map[string]string{"rpcprovider": "http://" + endpoint.Addr}
-	if err := (&Driver{}).Create(&asset.CreateWalletParams{
+	if err := (&Driver{}).Create(t.Context(), &asset.CreateWalletParams{
 		Type: walletTypeRPC, Seed: seed, Pass: seed, Settings: settings,
 		DataDir: dir, Net: util.Simnet, Logger: util.Disabled,
 	}); err != nil {

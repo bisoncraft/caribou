@@ -31,7 +31,7 @@ func TestElectrumWalletUsesConfiguredProxy(t *testing.T) {
 	if _, err := rand.Read(seed); err != nil {
 		t.Fatal(err)
 	}
-	if err := (&Driver{}).Create(&asset.CreateWalletParams{
+	if err := (&Driver{}).Create(t.Context(), &asset.CreateWalletParams{
 		Type: walletTypeElectrum, Seed: seed, Pass: []byte("abc"),
 		DataDir: dir, Net: util.Simnet, Logger: tLogger,
 	}); err != nil {

@@ -132,7 +132,7 @@ func TestDriverCreateValidation(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if err := drv.Create(tc.params); err == nil {
+			if err := drv.Create(t.Context(), tc.params); err == nil {
 				t.Fatalf("Create(%s) returned nil error; want validation failure", tc.name)
 			}
 		})

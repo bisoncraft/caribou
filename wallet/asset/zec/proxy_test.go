@@ -40,7 +40,7 @@ func TestBuiltInServersUseTheProxy(t *testing.T) {
 	dir := t.TempDir()
 	p := createParams(dir, util.Mainnet, 0)
 	p.TorProxy = proxy.Addr
-	if err := (&Driver{}).Create(p); err != nil {
+	if err := (&Driver{}).Create(t.Context(), p); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
 	cfg := o.latest().cfg

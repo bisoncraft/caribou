@@ -705,7 +705,7 @@ func TestDriverCreate(t *testing.T) {
 		t.Fatal("wallet should not exist before Create")
 	}
 
-	err = d.Create(&asset.CreateWalletParams{
+	err = d.Create(t.Context(), &asset.CreateWalletParams{
 		Type:    "rpc",
 		Seed:    seed,
 		Pass:    pw,
@@ -772,7 +772,7 @@ func TestSyncStatus(t *testing.T) {
 
 func TestDriverCreateUnknownType(t *testing.T) {
 	d := &Driver{}
-	err := d.Create(&asset.CreateWalletParams{
+	err := d.Create(t.Context(), &asset.CreateWalletParams{
 		Type: "unknown",
 		Seed: make([]byte, 32),
 	})
@@ -1298,7 +1298,7 @@ func newSendTestWalletWithHandlers(t *testing.T, infoHandler, exchangeHandler ht
 	dir := t.TempDir()
 
 	d := &Driver{}
-	if err := d.Create(&asset.CreateWalletParams{
+	if err := d.Create(t.Context(), &asset.CreateWalletParams{
 		Type: "rpc", Seed: seed, Pass: pw, DataDir: dir,
 		Net:    util.Testnet,
 		Logger: util.StdOutLogger("HLTEST", util.LevelTrace),
@@ -2732,7 +2732,7 @@ func TestConnectUsesPersistedWatermark(t *testing.T) {
 	dir := t.TempDir()
 
 	d := &Driver{}
-	if err := d.Create(&asset.CreateWalletParams{
+	if err := d.Create(t.Context(), &asset.CreateWalletParams{
 		Type:    "rpc",
 		Seed:    seed,
 		Pass:    pw,

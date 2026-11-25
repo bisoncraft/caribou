@@ -239,7 +239,7 @@ func (contractDeployer) nodeAndRate(
 	pw := []byte("abc")
 	chainID := chainCfg.ChainID.Int64()
 
-	if err := CreateEVMWallet(chainID, &asset.CreateWalletParams{
+	if err := CreateEVMWallet(ctx, chainID, &asset.CreateWalletParams{
 		Type:     walletTypeRPC,
 		Seed:     seed,
 		Pass:     pw,

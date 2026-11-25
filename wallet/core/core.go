@@ -1412,7 +1412,7 @@ func (c *Core) createSeededWallet(assetID uint32, crypter encrypt.Crypter, form 
 	}
 
 	c.log.Infof("Initializing a %s wallet", unbip(assetID))
-	if err = asset.CreateWallet(assetID, &asset.CreateWalletParams{
+	if err = asset.CreateWallet(c.ctx, assetID, &asset.CreateWalletParams{
 		Type:     form.Type,
 		Seed:     seed,
 		Pass:     pw,
@@ -1882,7 +1882,7 @@ func (c *Core) RecoverWallet(assetID uint32, appPW []byte, force bool) error {
 		bday = uint64(creds.Birthday.Unix())
 	}
 
-	if err = asset.CreateWallet(assetID, &asset.CreateWalletParams{
+	if err = asset.CreateWallet(c.ctx, assetID, &asset.CreateWalletParams{
 		Type:     dbWallet.Type,
 		Seed:     seed,
 		Pass:     pw,

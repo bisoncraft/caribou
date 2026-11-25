@@ -33,7 +33,7 @@ func TestSPVWalletRefusesProxy(t *testing.T) {
 // written, or they would be left behind by a wallet that can never connect.
 func TestCreateSPVRefusesProxy(t *testing.T) {
 	dir := t.TempDir()
-	err := (&Driver{}).Create(&asset.CreateWalletParams{
+	err := (&Driver{}).Create(t.Context(), &asset.CreateWalletParams{
 		Type:     walletTypeSPV,
 		Seed:     make([]byte, 32),
 		DataDir:  dir,

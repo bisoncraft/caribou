@@ -19,9 +19,9 @@ import (
 )
 
 const (
-	// createTimeout bounds Create. The birthday search and the account's
-	// tree state each try the servers in turn, at up to 30 seconds a call,
-	// and a Tor proxy adds to that.
+	// createTimeout bounds Create within the context it is given. The
+	// birthday search and the account's tree state each try the servers in
+	// turn, at up to 30 seconds a call, and a Tor proxy adds to that.
 	createTimeout = 5 * time.Minute
 	// birthdayMargin is how far before the seed's creation time the
 	// birthday search looks. A day covers block times, a wrong clock, and a
@@ -39,7 +39,7 @@ const (
 // paid, and a birthday cannot be lowered later. A seed made now scans the
 // last day of blocks. A zero creation time begins at the activation of
 // NU6.3, before which no account can hold Ironwood funds.
-func (d *Driver) Create(p *asset.CreateWalletParams) (err error) {
+func (d *Driver) Create(ctx context.Context, p *asset.CreateWalletParams) (err error) {
 	defer func() {
 		log := p.Logger
 		if log == nil {
@@ -84,9 +84,7 @@ func (d *Driver) Create(p *asset.CreateWalletParams) (err error) {
 	if log == nil {
 		log = util.Disabled
 	}
-	// Core gives Create no context. The timeout is the root of every call
-	// Create makes.
-	ctx, cancel := context.WithTimeout(context.Background(), createTimeout)
+	ctx, cancel := context.WithTimeout(ctx, createTimeout)
 	defer cancel()
 	be, err := openBackend(netCfg.zeclibConfig(dbPath, log), nil)
 	if err != nil {

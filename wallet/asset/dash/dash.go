@@ -4,6 +4,7 @@
 package dash
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -119,7 +120,7 @@ func (d *Driver) Exists(walletType, dataDir string, settings map[string]string, 
 // Create creates a new seeded Dash wallet. Both walletTypeSPV and
 // walletTypeElectrum are supported; they use the same underlying btcwallet
 // database and create path, differing only in the chain backend at open time.
-func (d *Driver) Create(params *asset.CreateWalletParams) error {
+func (d *Driver) Create(_ context.Context, params *asset.CreateWalletParams) error {
 	switch params.Type {
 	case walletTypeSPV, walletTypeElectrum:
 	default:

@@ -37,13 +37,13 @@ func TestDriverValidation(t *testing.T) {
 	if _, err := d.Exists("unknown", t.TempDir(), nil, util.Mainnet); err == nil {
 		t.Fatal("expected unknown wallet type error")
 	}
-	if err := d.Create(&asset.CreateWalletParams{Type: "unknown"}); err == nil {
+	if err := d.Create(t.Context(), &asset.CreateWalletParams{Type: "unknown"}); err == nil {
 		t.Fatal("expected unsupported wallet type error")
 	}
-	if err := d.Create(&asset.CreateWalletParams{Type: walletTypeElectrum}); err == nil {
+	if err := d.Create(t.Context(), &asset.CreateWalletParams{Type: walletTypeElectrum}); err == nil {
 		t.Fatal("expected missing seed error")
 	}
-	if err := d.Create(&asset.CreateWalletParams{Type: walletTypeElectrum, Seed: []byte("seed")}); err == nil {
+	if err := d.Create(t.Context(), &asset.CreateWalletParams{Type: walletTypeElectrum, Seed: []byte("seed")}); err == nil {
 		t.Fatal("expected missing data dir error")
 	}
 	if _, err := NewWallet(&asset.WalletConfig{Type: "unknown"}, tLogger, util.Mainnet); err == nil {
@@ -70,7 +70,7 @@ func TestDriverCreateAndExists(t *testing.T) {
 		Type: walletTypeElectrum, Seed: seed, Pass: []byte("pass"), DataDir: t.TempDir(),
 		Net: util.Regtest, Birthday: uint64(time.Now().Unix()), Logger: tLogger,
 	}
-	if err := d.Create(params); err != nil {
+	if err := d.Create(t.Context(), params); err != nil {
 		t.Fatal(err)
 	}
 	exists, err := d.Exists(walletTypeElectrum, params.DataDir, nil, util.Regtest)

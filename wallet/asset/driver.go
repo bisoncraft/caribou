@@ -52,7 +52,11 @@ type Driver interface {
 // implement Creator.
 type Creator interface {
 	Exists(walletType, dataDir string, settings map[string]string, net util.Network) (bool, error)
-	Create(*CreateWalletParams) error
+	// Create creates the wallet. The context bounds the work: a Create that
+	// uses the network ends it and returns when the context is done. What an
+	// interrupted Create leaves in the data directory must not prevent a
+	// later Create.
+	Create(context.Context, *CreateWalletParams) error
 }
 
 func withDriver(assetID uint32, f func(Driver) error) error {
@@ -125,13 +129,13 @@ func WalletExists(assetID uint32, walletType, dataDir string, settings map[strin
 }
 
 // CreateWallet creates a new wallet. Only use Create for seeded wallet types.
-func CreateWallet(assetID uint32, seedParams *CreateWalletParams) error {
+func CreateWallet(ctx context.Context, assetID uint32, seedParams *CreateWalletParams) error {
 	return withDriver(assetID, func(drv Driver) error {
 		creator, is := drv.(Creator)
 		if !is {
 			return fmt.Errorf("driver has no Create method")
 		}
-		return creator.Create(seedParams)
+		return creator.Create(ctx, seedParams)
 	})
 }
 

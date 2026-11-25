@@ -170,7 +170,7 @@ func createHarnessWallet(t *testing.T, name string, seed []byte) *harnessWallet 
 	fastPolling(t)
 	hw := &harnessWallet{t: t, name: name, dir: t.TempDir(), seed: seed,
 		notes: make(chan asset.WalletNotification, 4096)}
-	err := (&Driver{}).Create(&asset.CreateWalletParams{
+	err := (&Driver{}).Create(t.Context(), &asset.CreateWalletParams{
 		Type: walletTypeNative, Seed: seed, Pass: testPW, DataDir: hw.dir, Net: util.Simnet,
 		Birthday: uint64(time.Now().Unix()), Logger: newTestLogger(t, name+"-create"),
 	})
@@ -424,7 +424,7 @@ func (hw *harnessWallet) balance() asset.Balance {
 func bystander(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
-	if err := (&Driver{}).Create(&asset.CreateWalletParams{
+	if err := (&Driver{}).Create(t.Context(), &asset.CreateWalletParams{
 		Type: walletTypeNative, Seed: randomSeed(t), Pass: testPW, DataDir: dir, Net: util.Simnet,
 	}); err != nil {
 		t.Fatalf("Create: %v", err)
