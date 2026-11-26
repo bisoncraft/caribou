@@ -97,13 +97,11 @@ if command -v markdownlint-cli2 > /dev/null 2>&1; then
 	markdownlint-cli2 "*.md" "docs/**/*.md"
 fi
 
-# check linters. SKIP_GO_LINT lets CI skip golangci-lint on Go versions the
-# pinned linter binary was not built for: a golangci-lint built with go1.25
-# panics on go1.26 std-lib files. Linting is Go-version-agnostic, so running it
-# on a single matrix entry is enough. Unset means run.
-#
-# TODO: remove SKIP_GO_LINT (and the matrix env in build.yml) once the pinned
-# golangci-lint is bumped to a release built with go1.26.
+# check linters. SKIP_GO_LINT lets CI run golangci-lint on one matrix entry
+# only: linting is Go-version-agnostic, so once is enough. The entry it runs
+# on has to be a Go version no newer than the one the pinned linter binary was
+# built with, since a golangci-lint built with an older Go panics on the newer
+# std-lib files. Unset means run.
 if [ -n "$SKIP_GO_LINT" ]; then
 	echo "Skipping golangci-lint (SKIP_GO_LINT set)."
 else
