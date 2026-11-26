@@ -24,15 +24,16 @@ import (
 //     wired to the same X11 computation. Transaction ids remain sha256d (handled
 //     in bisonwire).
 //   - Difficulty. Dash retargets every block (Dark Gravity Wave), not on
-//     Bitcoin's 2016-block schedule, so the Bitcoin-style interval retarget
-//     validation in the electrum header path is inapplicable. We set
-//     PoWNoRetargeting on every network to skip it (the same posture the
-//     neutrino path already takes, where BFFastAdd skips retarget validation).
-//     The per-header check therefore carries the difficulty validation: the
-//     CheckPoW hook bounds the claimed target by PowLimit in addition to
-//     checking the X11 hash against it, and the static Checkpoints (from
-//     dashpay/dash chainparams.cpp) pin the historical chain that headers-sync
-//     must reproduce.
+//     Bitcoin's 2016-block schedule. Every network sets PoWNoRetargeting so
+//     the btcd params derived for the neutrino path never apply Bitcoin's
+//     interval retarget check (BFFastAdd skips retarget validation there in
+//     any case). On mainnet the electrum header path enforces Dark Gravity
+//     Wave through NextBits (dashNextBits): each header above the anchor must
+//     carry the bits consensus derives from the 24 blocks below it. Testnet
+//     and regtest allow minimum-difficulty blocks and carry no rule; there the
+//     claimed difficulty is bounded only by PowLimit (checked by the header
+//     store and by the CheckPoW hook) and the checkpoints pin the historical
+//     chain.
 //
 // The genesis coinbase, merkle root, and per-network values are translated from
 // dashpay/dash src/chainparams.cpp. The network magics are the REAL Dash
@@ -59,14 +60,14 @@ func dashHeaderHash(hdr *wire.BlockHeader) chainhash.Hash {
 }
 
 // dashCheckPoW returns a CheckPoW hook that validates a header's X11 hash
-// against its claimed target AND bounds the claimed target itself by powLimit.
-// Bounding Bits matters more for Dash than for BTC/LTC: with PoWNoRetargeting
-// set (DGW retargets per-block, so interval retarget validation is
-// inapplicable), nothing else on the electrum header path constrains the
-// difficulty a server may claim, so an unbounded hook would accept headers at
-// any self-declared target. The neutrino path independently gets the same
-// bound from blockchain.CheckBlockHeaderSanity, whose target checks run even
-// under BFNoPoWCheck.
+// against its claimed target AND bounds the claimed target itself by powLimit,
+// so no caller of the hook accepts a header at a self-declared target above
+// the limit. The electrum header store also range-checks every target, and on
+// mainnet requires the Dark Gravity Wave bits; on testnet and regtest the
+// bound is the only limit on the difficulty a server may claim. The neutrino
+// path independently gets the same bound from
+// blockchain.CheckBlockHeaderSanity, whose target checks run even under
+// BFNoPoWCheck.
 func dashCheckPoW(powLimit *big.Int) func(*wire.BlockHeader) error {
 	return func(hdr *wire.BlockHeader) error {
 		target := blockchain.CompactToBig(hdr.Bits)
@@ -81,6 +82,89 @@ func dashCheckPoW(powLimit *big.Int) func(*wire.BlockHeader) error {
 			return fmt.Errorf("block hash of %064x is higher than expected max of %064x", hashNum, target)
 		}
 		return nil
+	}
+}
+
+// dashDGWHeight is the first mainnet height whose bits Dark Gravity Wave sets
+// (consensus.nPowDGWHeight in Dash Core's chainparams.cpp). Lower blocks
+// follow Kimoto Gravity Well or Bitcoin's interval rule, neither of which is
+// implemented; every header store starts far above this height.
+const dashDGWHeight = 34140
+
+// dashDGWPastBlocks is the number of blocks Dark Gravity Wave reads.
+const dashDGWPastBlocks = 24
+
+// dashNextBits returns the NextBits rule of Dash mainnet: Dark Gravity Wave
+// v3, ported from DarkGravityWave in Dash Core v24.0.2 src/pow.cpp. The bits
+// of the block at height h follow from blocks h-24 through h-1:
+//
+//   - The past target average starts at the target of block h-1 and takes in
+//     each older block's target T as avg = (avg*n + T) / (n+1), where n runs
+//     from 2 at block h-2 to 24 at block h-24. Every step truncates. The
+//     result is not an arithmetic mean, and a closed form gives different
+//     bits, so the iteration order and per-step truncation are consensus.
+//   - The actual timespan runs from block h-24 to block h-1, 23 intervals,
+//     against a target timespan of 24 block spacings (3600 s on mainnet).
+//     Core keeps the off-by-one, which puts mainnet blocks about 2.63 minutes
+//     apart on average. The actual timespan is clamped to [target/3,
+//     target*3], with Core's integer division.
+//   - The new target is avg * actual / target, capped at PowLimit and encoded
+//     as compact bits.
+//
+// The rule does not read the new block's own timestamp: in Dash Core only
+// the minimum-difficulty rules of testnet and devnets consult it. Heights
+// below dashDGWHeight report false. The targets read come from headers that
+// passed the (0, PowLimit] range check or from checkpoint entries held to the
+// same range, where blockchain.CompactToBig decodes as Core's SetCompact does.
+//
+// Core computes in 256-bit integers that wrap on overflow; big.Int does not
+// wrap. With every input target at most PowLimit the average stays at most
+// PowLimit, so the largest intermediate values are 25*PowLimit (avg*24 + T)
+// and 3*3600*PowLimit (the retarget product). The constructor panics unless
+// both are below 2^256, where the two arithmetics agree.
+func dashNextBits(p *netparams.ChainParams) func(int32, netparams.DifficultyAt) (uint32, bool) {
+	if p.ReduceMinDifficulty {
+		panic(fmt.Sprintf("Dark Gravity Wave rule on %s %s, which allows minimum-difficulty blocks",
+			p.Chain, p.Name))
+	}
+	if p.PowLimit == nil || p.TargetTimePerBlock < time.Second {
+		panic(fmt.Sprintf("Dark Gravity Wave rule on %s %s without difficulty parameters",
+			p.Chain, p.Name))
+	}
+	targetTimespan := int64(dashDGWPastBlocks * p.TargetTimePerBlock / time.Second)
+	maxFactor := max(dashDGWPastBlocks+1, 3*targetTimespan)
+	if new(big.Int).Mul(p.PowLimit, big.NewInt(maxFactor)).BitLen() > 256 {
+		panic(fmt.Sprintf("Dark Gravity Wave on %s %s: PowLimit * %d overflows 256 bits",
+			p.Chain, p.Name, maxFactor))
+	}
+	return func(height int32, at netparams.DifficultyAt) (uint32, bool) {
+		if height < dashDGWHeight {
+			return 0, false
+		}
+		last, ok := at(height - 1)
+		if !ok {
+			return 0, false
+		}
+		avg := blockchain.CompactToBig(last.Bits)
+		first := last
+		for n := int64(2); n <= dashDGWPastBlocks; n++ {
+			d, ok := at(height - int32(n))
+			if !ok {
+				return 0, false
+			}
+			avg.Mul(avg, big.NewInt(n))
+			avg.Add(avg, blockchain.CompactToBig(d.Bits))
+			avg.Quo(avg, big.NewInt(n+1))
+			first = d
+		}
+		actual := int64(last.Timestamp) - int64(first.Timestamp)
+		actual = max(min(actual, targetTimespan*3), targetTimespan/3)
+		avg.Mul(avg, big.NewInt(actual))
+		avg.Quo(avg, big.NewInt(targetTimespan))
+		if avg.Cmp(p.PowLimit) > 0 {
+			avg.Set(p.PowLimit)
+		}
+		return blockchain.BigToCompact(avg), true
 	}
 }
 
@@ -116,29 +200,83 @@ var dashSimnetNeutrinoSeeds = []string{"127.0.0.1:20775"}
 
 // dashMainnetCheckpoints are ordered from oldest to newest. Hashes are X11
 // block-header hashes, so they compare directly against HeaderHash results.
-// With interval retarget validation disabled (PoWNoRetargeting), they pin the
-// chain during headers-sync on both the electrum and neutrino paths. The first
-// is the launch anchor (block 2487500, ~2026-06-13, taken from dashpay/dash
-// src/chainparams.cpp): the electrum header store starts there and no wallet
-// birthday predates it, so it never moves. Dash retargets every block, so
-// there is no retarget period to align to; a checkpoint follows every 52500
-// blocks (about three months) and is added once mined. Hashes cross-checked
-// via insight.dash.org and blockchair.com.
+// They pin the chain during headers-sync on both the electrum and neutrino
+// paths. The first is the launch anchor (block 2487500, ~2026-06-13, taken
+// from dashpay/dash src/chainparams.cpp): the electrum header store starts
+// there and no wallet birthday predates it, so it never moves. Dash retargets
+// every block, so there is no retarget period to align to; a checkpoint
+// follows every 52500 blocks (about three months) and is added once mined.
+// Hashes cross-checked via insight.dash.org and blockchair.com.
 // The livenet TestCheckpointRecords in the spv package fetches each header and
 // filter header from P2P peers, checks the header against the hash, and
 // requires the peers to agree on the filter header.
+// Difficulty holds the bits and timestamps of the 23 blocks below each
+// checkpoint, which Dark Gravity Wave reads for the blocks just above it
+// (see dashNextBits). TestCheckpointRecords derives them from headers linked
+// back to the checkpoint header; they were cross-checked against an electrumx
+// server and blockchair.com.
 var dashMainnetCheckpoints = []netparams.Checkpoint{
 	{
 		Height:       2487500, // 2026-06-13
 		Hash:         newHashFromStr("00000000000000119fe42827219e0686d3f7b494ae65f823194c740c5dbab492"),
 		Header:       newHeaderFromStr("000000208553a10fa4d05609e14c46e32f4f978bc375f8f6012413b02300000000000000911418a4dc044cbd5b7b1b1041a8b9e43c31e052e3d3b59ba2246be120817ed45ac22c6a3583291951845a96"),
 		FilterHeader: newHashFromStr("b9842cad245a156d0f8a759f6e7c79e286855e8ed8ea2c9333b3ce7756e49d68"),
+		Difficulty: []netparams.BlockDifficulty{
+			{Bits: 0x1930f48b, Timestamp: 1781314489}, // 2487477
+			{Bits: 0x19309075, Timestamp: 1781314517}, // 2487478
+			{Bits: 0x1931323d, Timestamp: 1781314694}, // 2487479
+			{Bits: 0x192d6a41, Timestamp: 1781315205}, // 2487480
+			{Bits: 0x19338084, Timestamp: 1781315253}, // 2487481
+			{Bits: 0x19320408, Timestamp: 1781315262}, // 2487482
+			{Bits: 0x192e78e1, Timestamp: 1781315310}, // 2487483
+			{Bits: 0x192ca275, Timestamp: 1781315377}, // 2487484
+			{Bits: 0x192c89a1, Timestamp: 1781315630}, // 2487485
+			{Bits: 0x192c7a19, Timestamp: 1781315712}, // 2487486
+			{Bits: 0x192c7956, Timestamp: 1781315795}, // 2487487
+			{Bits: 0x192cbcb6, Timestamp: 1781315804}, // 2487488
+			{Bits: 0x192a4e71, Timestamp: 1781315827}, // 2487489
+			{Bits: 0x19261c5f, Timestamp: 1781315858}, // 2487490
+			{Bits: 0x1920b826, Timestamp: 1781316288}, // 2487491
+			{Bits: 0x192557b9, Timestamp: 1781316422}, // 2487492
+			{Bits: 0x1925bd51, Timestamp: 1781316559}, // 2487493
+			{Bits: 0x192287cc, Timestamp: 1781316748}, // 2487494
+			{Bits: 0x1922c81e, Timestamp: 1781316957}, // 2487495
+			{Bits: 0x1924a86a, Timestamp: 1781317503}, // 2487496
+			{Bits: 0x19295b4a, Timestamp: 1781317539}, // 2487497
+			{Bits: 0x1928f3ca, Timestamp: 1781317589}, // 2487498
+			{Bits: 0x19284a7f, Timestamp: 1781317950}, // 2487499
+		},
 	},
 	{
 		Height:       2540000, // 2026-09-16
 		Hash:         newHashFromStr("00000000000000070aad634297c7ab0dcf7242b86288f80110c9ca7ab60e38c5"),
 		Header:       newHeaderFromStr("00000020fb2ad6b6f861bdd345b82777cbec911bc8cf7524d151f4911f00000000000000343e1eac77001e2b6b42053bd923eceb8c8228394aac3463a30196425faab8364f07ab6a74ba1d194a49da11"),
 		FilterHeader: newHashFromStr("c0d5a3ccf9e8e427a0883c39ca3a7f986325b1ea0eeecaaa795bbafc12936492"),
+		Difficulty: []netparams.BlockDifficulty{
+			{Bits: 0x1930f789, Timestamp: 1789591045}, // 2539977
+			{Bits: 0x1936a70b, Timestamp: 1789591110}, // 2539978
+			{Bits: 0x193414f2, Timestamp: 1789591159}, // 2539979
+			{Bits: 0x193054e6, Timestamp: 1789591218}, // 2539980
+			{Bits: 0x192fb392, Timestamp: 1789591354}, // 2539981
+			{Bits: 0x192fbcf7, Timestamp: 1789591413}, // 2539982
+			{Bits: 0x192dc81f, Timestamp: 1789591481}, // 2539983
+			{Bits: 0x192ba462, Timestamp: 1789591602}, // 2539984
+			{Bits: 0x1925e80f, Timestamp: 1789591810}, // 2539985
+			{Bits: 0x19249c94, Timestamp: 1789592002}, // 2539986
+			{Bits: 0x19261144, Timestamp: 1789592004}, // 2539987
+			{Bits: 0x19254143, Timestamp: 1789592113}, // 2539988
+			{Bits: 0x1925bff4, Timestamp: 1789592247}, // 2539989
+			{Bits: 0x1927098f, Timestamp: 1789592254}, // 2539990
+			{Bits: 0x1925711b, Timestamp: 1789592334}, // 2539991
+			{Bits: 0x19244399, Timestamp: 1789592626}, // 2539992
+			{Bits: 0x19261826, Timestamp: 1789592737}, // 2539993
+			{Bits: 0x19273671, Timestamp: 1789592793}, // 2539994
+			{Bits: 0x192511d1, Timestamp: 1789592825}, // 2539995
+			{Bits: 0x1923ac35, Timestamp: 1789593050}, // 2539996
+			{Bits: 0x19233927, Timestamp: 1789593084}, // 2539997
+			{Bits: 0x1921989a, Timestamp: 1789593121}, // 2539998
+			{Bits: 0x191fbd40, Timestamp: 1789593124}, // 2539999
+		},
 	},
 }
 
@@ -184,6 +322,7 @@ var DashParams = map[string]*netparams.ChainParams{
 		TargetTimePerBlock:       time.Second * 150, // Dash: 2.5 minutes
 		RetargetAdjustmentFactor: 4,
 		ReduceMinDifficulty:      false,
+		DifficultyLookback:       dashDGWPastBlocks - 1, // DGW at C+1 reads blocks C-23 through C
 		Checkpoints:              dashMainnetCheckpoints,
 		Bech32HRPSegwit:          "", // Dash has no SegWit
 		PubKeyHashAddrID:         0x4c,

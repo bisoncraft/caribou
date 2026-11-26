@@ -9,9 +9,11 @@
 // block header (getheaders with an empty locator and the checkpoint hash as the
 // stop hash) and the filter header (a one-block getcfheaders). The header must
 // hash to the checkpoint hash, and the filter header must agree across peers.
-// Records that lack a header or filter header are printed as Go literals for
-// the assets package, so adding a checkpoint only requires its height and
-// hash:
+// The difficulty entries come from the DifficultyLookback headers below the
+// checkpoint, each fetched by the hash its child commits to, so they link back
+// to the checkpoint header. Records that lack a header, filter header or
+// difficulty entries are printed as Go literals for the assets package, so
+// adding a checkpoint only requires its height and hash:
 //
 //	go test -tags livenet -run TestCheckpointRecords -v ./wallet/utxowallet/spv/
 
@@ -78,10 +80,18 @@ func TestCheckpointRecords(t *testing.T) {
 			var incomplete bool
 			for _, cp := range tc.params.Checkpoints {
 				hdr, fh := checkpointData(ctx, t, tc.params, peers, cp)
-				literals = append(literals, checkpointLiteral(cp, hdr, fh))
-				if cp.Header == nil || cp.FilterHeader == nil {
+				diff := difficultyEntries(ctx, t, tc.params, peers, hdr, cp.Height)
+				literals = append(literals, checkpointLiteral(cp, hdr, fh, diff))
+				if cp.Header == nil || cp.FilterHeader == nil ||
+					len(cp.Difficulty) != tc.params.DifficultyLookback {
 					incomplete = true
 					continue
+				}
+				for i := range diff {
+					if cp.Difficulty[i] != diff[i] {
+						t.Errorf("checkpoint %d: recorded difficulty entry %d is %+v, network %+v",
+							cp.Height, i, cp.Difficulty[i], diff[i])
+					}
 				}
 				if *cp.Header != *hdr {
 					t.Errorf("checkpoint %d: recorded header differs from the network's", cp.Height)
@@ -157,18 +167,61 @@ func checkpointData(ctx context.Context, t *testing.T, params *netparams.ChainPa
 	panic("unreachable")
 }
 
-func checkpointLiteral(cp netparams.Checkpoint, hdr *wire.BlockHeader, fh chainhash.Hash) string {
+// difficultyEntries returns the difficulty fields of the DifficultyLookback
+// blocks below the checkpoint header hdr at height, oldest first. Each header
+// is requested by the hash its child commits to and checked against it, so
+// the entries link back to the checkpoint header. Peers are tried in turn for
+// each header.
+func difficultyEntries(ctx context.Context, t *testing.T, params *netparams.ChainParams,
+	peers []*filterPeer, hdr *wire.BlockHeader, height int32) []netparams.BlockDifficulty {
+
+	t.Helper()
+	entries := make([]netparams.BlockDifficulty, params.DifficultyLookback)
+	child := hdr
+	for i := len(entries) - 1; i >= 0; i-- {
+		hash := child.PrevBlock
+		var parent *wire.BlockHeader
+		for _, fp := range peers {
+			p, err := fp.header(ctx, params, &hash)
+			if err != nil {
+				t.Logf("checkpoint %d: header %s from %s: %v", height, hash, fp.Addr(), err)
+				continue
+			}
+			parent = p
+			break
+		}
+		if parent == nil {
+			t.Fatalf("checkpoint %d: no peer returned header %s at height %d",
+				height, hash, height-int32(len(entries)-i))
+		}
+		entries[i] = netparams.HeaderDifficulty(parent)
+		child = parent
+	}
+	return entries
+}
+
+func checkpointLiteral(cp netparams.Checkpoint, hdr *wire.BlockHeader, fh chainhash.Hash,
+	diff []netparams.BlockDifficulty) string {
+
 	var b bytes.Buffer
 	if err := hdr.Serialize(&b); err != nil {
 		panic(err)
+	}
+	var d string
+	if len(diff) > 0 {
+		entries := make([]string, len(diff))
+		for i, e := range diff {
+			entries[i] = fmt.Sprintf("{Bits: 0x%08x, Timestamp: %d}", e.Bits, e.Timestamp)
+		}
+		d = fmt.Sprintf("\n\tDifficulty:   []netparams.BlockDifficulty{%s},", strings.Join(entries, ", "))
 	}
 	return fmt.Sprintf(`{
 	Height:       %d, // %s
 	Hash:         newHashFromStr("%s"),
 	Header:       newHeaderFromStr("%s"),
-	FilterHeader: newHashFromStr("%s"),
+	FilterHeader: newHashFromStr("%s"),%s
 },`, cp.Height, hdr.Timestamp.UTC().Format(time.DateOnly), cp.Hash,
-		hex.EncodeToString(b.Bytes()), fh)
+		hex.EncodeToString(b.Bytes()), fh, d)
 }
 
 // filterPeer is an outbound peer that serves compact filters, with the

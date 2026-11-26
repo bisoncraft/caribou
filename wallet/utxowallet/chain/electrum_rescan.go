@@ -102,6 +102,14 @@ func (c *ElectrumClient) Sweep(entries []SweepEntry) (hits, failed []btcutil.Add
 	if err := c.ctx.Err(); err != nil {
 		return nil, nil, fmt.Errorf("electrum: sweep on stopped client: %w", err)
 	}
+	// The sweep commits confirmed history to the diff baseline before
+	// emitting it, and emission refuses confirmations until the header
+	// store is synced (see headersReady), so a sweep before then would
+	// drop them. Failing leaves the cold floors unadvanced for the next
+	// interval.
+	if !c.net.Synced() {
+		return nil, nil, fmt.Errorf("electrum: sweep before initial header sync")
+	}
 
 	type result struct {
 		entry SweepEntry
@@ -489,11 +497,15 @@ func (c *ElectrumClient) Rescan(startHash *chainhash.Hash,
 		return fmt.Errorf("electrum: rescan on stopped client: %w", err)
 	}
 
-	// A rescan before the initial header sync has a tip would walk an empty
-	// chain and never emit RescanFinished (tryDispatchRescanFinished has no
-	// header at tip -1). Callers must wait for IsCurrent first; surface a
-	// clear error rather than hanging if they don't.
-	//
+	// A rescan before the initial header sync completes would verify
+	// confirmations against headers nothing has authenticated yet (see
+	// headersReady), and before the store has a tip it would walk an empty
+	// chain and never emit RescanFinished. Callers must wait for IsCurrent;
+	// refuse rather than proceed if they don't.
+	if !c.net.Synced() {
+		return fmt.Errorf("electrum: rescan before initial header sync")
+	}
+
 	// The walk's tip is snapshotted HERE, before the history collection
 	// below, and that same value bounds both the collected baselines and
 	// the walk. Reading the tip again after collection races a mid-setup

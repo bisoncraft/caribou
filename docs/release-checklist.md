@@ -84,8 +84,12 @@ UTXO assets:
   | LTC | 52416 blocks | 26 retarget periods of 2016 |
   | Dash | 52500 blocks | no retarget period (retargets every block) |
 
-  Cross-check each hash against two explorers, then sync through the
-  new entries with
+  Cross-check each hash against two explorers. With the height and hash
+  in place,
+  `go test -tags livenet -run TestCheckpointRecords -v ./wallet/utxowallet/spv/`
+  prints the full record: header, filter header and the difficulty
+  entries of the blocks below it (one on LTC, 23 on Dash). Then sync
+  through the new entries with
   `go test -tags livenet -run TestAnchorHeaderSync ./wallet/utxowallet/electrum/`.
   Never remove or move an entry: the first one is the launch anchor
   the electrum header store starts from, and `DefaultWalletBirthday`

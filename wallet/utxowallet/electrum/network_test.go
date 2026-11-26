@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -48,7 +49,7 @@ func TestCatchUpFromExactFork(t *testing.T) {
 	a, b := forkedChain(forkAt, lenA, lenB)
 
 	h, _ := newTestHeaders(t)
-	if _, err := h.AppendBatch(0, serializeBatch(t, a), 0); err != nil {
+	if _, err := h.AppendBatch(0, serializeBatch(t, a)); err != nil {
 		t.Fatalf("load chain A: %v", err)
 	}
 	n := &Network{
@@ -110,7 +111,7 @@ func TestCatchUpFromDeepReorg(t *testing.T) {
 	a, b := forkedChain(forkAt, lenA, lenB)
 
 	h, _ := newTestHeaders(t)
-	if _, err := h.AppendBatch(0, serializeBatch(t, a), 0); err != nil {
+	if _, err := h.AppendBatch(0, serializeBatch(t, a)); err != nil {
 		t.Fatalf("load chain A: %v", err)
 	}
 	if h.Tip() != lenA-1 {
@@ -161,46 +162,32 @@ func TestCatchUpFromDeepReorg(t *testing.T) {
 	}
 }
 
-// TestCatchUpFromReorgExceedsBound verifies a reorg deeper than maxReorgDepth
-// is surfaced as an error rather than rewinding without bound.
+// TestCatchUpFromReorgExceedsBound: a fork deeper than maxReorgDepth is
+// surfaced as an error, and since nothing truncates without a validated
+// replacement in hand, the store and the consumer are untouched.
 func TestCatchUpFromReorgExceedsBound(t *testing.T) {
-	// Fork point far below tip: lenA-1 - forkAt > maxReorgDepth.
 	forkAt := 5
 	lenA := maxReorgDepth + 50
 	lenB := lenA + 5
 	a, b := forkedChain(forkAt, lenA, lenB)
 
 	h, _ := newTestHeaders(t)
-	if _, err := h.AppendBatch(0, serializeBatch(t, a), 0); err != nil {
+	if _, err := h.AppendBatch(0, serializeBatch(t, a)); err != nil {
 		t.Fatalf("load chain A: %v", err)
 	}
-
 	n := &Network{
 		cfg:     &Config{Chain: testChainConfig(), HeaderBatchSize: 16},
 		headers: h,
 	}
-	fetch := func(start, count int32) ([]byte, int, error) {
-		end := min(int(start)+int(count), len(b))
-		if int(start) >= end {
-			return nil, 0, nil
-		}
-		return serializeBatch(t, b[start:end]), end - int(start), nil
-	}
-
-	disc, err := n.catchUpFrom(int32(lenB-1), fetch)
+	disc, err := n.catchUpFrom(int32(lenB-1), servingFetcher(t, b))
 	if err == nil {
 		t.Fatal("expected error for reorg deeper than maxReorgDepth")
 	}
-	// Even on the unrecoverable error, the blocks already truncated must be
-	// returned so the caller (applyTipNotification) can publish the rollback
-	// rather than leaving the store and the wallet view diverged (review #1).
-	if len(disc) == 0 {
-		t.Fatal("expected non-empty disconnects returned alongside the error")
+	if len(disc) != 0 {
+		t.Fatalf("%d blocks disconnected without a swap", len(disc))
 	}
-	// The reported disconnects must match the blocks actually removed: the
-	// tip dropped from lenA-1 by len(disc).
-	if h.Tip() != int32(lenA-1)-int32(len(disc)) {
-		t.Fatalf("tip %d inconsistent with %d disconnects from %d", h.Tip(), len(disc), lenA-1)
+	if h.Tip() != int32(lenA-1) || h.TipHash() != a[lenA-1].BlockHash() {
+		t.Fatalf("store moved to tip %d", h.Tip())
 	}
 }
 
@@ -211,7 +198,7 @@ func TestCatchUpFromReorgExceedsBound(t *testing.T) {
 func TestApplyTipNotificationBlocksUntilDelivered(t *testing.T) {
 	chain := synthChain(6, 2000) // heights 0..5
 	h, _ := newTestHeaders(t)
-	if _, err := h.AppendBatch(0, serializeBatch(t, chain[:4]), 0); err != nil { // load 0..3
+	if _, err := h.AppendBatch(0, serializeBatch(t, chain[:4])); err != nil { // load 0..3
 		t.Fatalf("load: %v", err)
 	}
 
@@ -231,7 +218,7 @@ func TestApplyTipNotificationBlocksUntilDelivered(t *testing.T) {
 	lastDelivered := int32(3)
 	done := make(chan struct{})
 	go func() {
-		n.applyTipNotification(&HeadersTip{Height: 4, Hex: hdrHex(4)}, &lastDelivered)
+		n.applyTipNotification(nil, &HeadersTip{Height: 4, Hex: hdrHex(4)}, &lastDelivered)
 		close(done)
 	}()
 
@@ -269,7 +256,7 @@ func TestApplyTipNotificationBlocksUntilDelivered(t *testing.T) {
 func TestApplyTipNotificationShutdownEscape(t *testing.T) {
 	chain := synthChain(6, 2000)
 	h, _ := newTestHeaders(t)
-	if _, err := h.AppendBatch(0, serializeBatch(t, chain[:4]), 0); err != nil {
+	if _, err := h.AppendBatch(0, serializeBatch(t, chain[:4])); err != nil {
 		t.Fatalf("load: %v", err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -285,7 +272,7 @@ func TestApplyTipNotificationShutdownEscape(t *testing.T) {
 	lastDelivered := int32(3)
 	done := make(chan struct{})
 	go func() {
-		n.applyTipNotification(&HeadersTip{Height: 4, Hex: hdrHex(4)}, &lastDelivered)
+		n.applyTipNotification(nil, &HeadersTip{Height: 4, Hex: hdrHex(4)}, &lastDelivered)
 		close(done)
 	}()
 	time.Sleep(50 * time.Millisecond) // let it block on the send
@@ -465,7 +452,7 @@ func TestNetworkStopWithoutStart(t *testing.T) {
 func TestCatchUpFromNoFork(t *testing.T) {
 	a := synthChain(20, 1)
 	h, _ := newTestHeaders(t)
-	if _, err := h.AppendBatch(0, serializeBatch(t, a), 0); err != nil {
+	if _, err := h.AppendBatch(0, serializeBatch(t, a)); err != nil {
 		t.Fatalf("load chain A: %v", err)
 	}
 	n := &Network{
@@ -494,5 +481,270 @@ func TestCatchUpFromNoFork(t *testing.T) {
 	}
 	if h.Tip() != 19 || h.byHeight[19].BlockHash() != a[19].BlockHash() {
 		t.Fatalf("store moved: tip %d", h.Tip())
+	}
+}
+
+// servingFetcher returns a headerFetcher serving chain.
+func servingFetcher(t *testing.T, chain []*wire.BlockHeader) headerFetcher {
+	t.Helper()
+	return func(start, count int32) ([]byte, int, error) {
+		end := min(int(start)+int(count), len(chain))
+		if int(start) >= end {
+			return nil, 0, nil
+		}
+		return serializeBatch(t, chain[start:end]), end - int(start), nil
+	}
+}
+
+// reorgNet returns a Network over a store holding a, fetching in batches of
+// batch headers, with nothing else wired.
+func reorgNet(t *testing.T, a []*wire.BlockHeader, batch int) *Network {
+	t.Helper()
+	h, _ := newTestHeaders(t)
+	if _, err := h.AppendBatch(0, serializeBatch(t, a)); err != nil {
+		t.Fatalf("load chain A: %v", err)
+	}
+	return &Network{cfg: &Config{Chain: testChainConfig(), HeaderBatchSize: batch}, headers: h}
+}
+
+// divergeFrom returns chain[:keep] followed by n new headers mined on top.
+func divergeFrom(chain []*wire.BlockHeader, keep, n int, seed uint32) []*wire.BlockHeader {
+	out := append([]*wire.BlockHeader(nil), chain[:keep]...)
+	for i := range n {
+		prev := out[len(out)-1]
+		hdr := &wire.BlockHeader{Version: 1, PrevBlock: prev.BlockHash(), Bits: 0x207fffff,
+			Timestamp: prev.Timestamp.Add(time.Minute), Nonce: seed + uint32(i)<<10}
+		mineHeader(hdr)
+		out = append(out, hdr)
+	}
+	return out
+}
+
+// TestReorgBranchSeamRetried: a branch fetched in two responses, between which
+// the server reorgs, does not link across the response boundary. That is an
+// honest server's reorg, not a rule violation: the attempt is retried and the
+// store lands on the server's current chain.
+func TestReorgBranchSeamRetried(t *testing.T) {
+	const forkAt = 5 // first differing height; the stored span is 5-14
+	a, b := forkedChain(forkAt, 15, 20)
+	c := divergeFrom(b, 8, 14, 600_000) // the server's chain after its reorg
+	n := reorgNet(t, a, 5)
+
+	var switched bool
+	var locates int
+	fetch := func(start, count int32) ([]byte, int, error) {
+		chain := b
+		if switched {
+			chain = c
+		}
+		if start == forkAt && !switched {
+			// The first branch response comes from b; everything after
+			// it from c.
+			defer func() { switched = true }()
+		}
+		if count == reorgRewindDepth {
+			locates++
+		}
+		return servingFetcher(t, chain)(start, count)
+	}
+	disc, err := n.catchUpFrom(19, fetch)
+	if err != nil {
+		t.Fatalf("catchUpFrom: %v", err)
+	}
+	if _, ok := isRuleError(err); ok {
+		t.Fatal("seam charged as a rule violation")
+	}
+	if locates < 2 {
+		t.Fatalf("fork located %d times, want a retry", locates)
+	}
+	if n.headers.Tip() != 19 || n.headers.TipHash() != c[19].BlockHash() {
+		t.Fatalf("tip %d %s, want c's tip", n.headers.Tip(), n.headers.TipHash())
+	}
+	if len(disc) != 10 || disc[0].Height != 14 || disc[9].Height != forkAt {
+		t.Fatalf("disconnected %d blocks, want a's 14 down to %d", len(disc), forkAt)
+	}
+}
+
+// TestReorgBreakInsideResponse: a branch that breaks inside one response is
+// the server contradicting itself, a RuleError, and the store is untouched.
+func TestReorgBreakInsideResponse(t *testing.T) {
+	const forkAt = 5
+	a, b := forkedChain(forkAt, 15, 20)
+	forged := append([]*wire.BlockHeader(nil), b...)
+	bad := *forged[7]
+	bad.PrevBlock = chainhash.Hash{0xbe, 0xef}
+	mineHeader(&bad)
+	forged[7] = &bad // b[8] still points at the original b[7]
+	n := reorgNet(t, a, 5)
+
+	disc, err := n.catchUpFrom(19, servingFetcher(t, forged))
+	if height, ok := isRuleError(err); !ok || height != 7 {
+		t.Fatalf("got %v, want a RuleError at 7", err)
+	}
+	if len(disc) != 0 || n.headers.Tip() != 14 || n.headers.TipHash() != a[14].BlockHash() {
+		t.Fatal("store moved on a refused branch")
+	}
+}
+
+// TestReorgAttemptBound: a server whose branch seams on every attempt is given
+// up on after maxReorgAttempts attempts, with the store untouched.
+func TestReorgAttemptBound(t *testing.T) {
+	const forkAt = 5
+	a, b := forkedChain(forkAt, 15, 20)
+	c := divergeFrom(b, 8, 14, 700_000)
+	n := reorgNet(t, a, 5)
+
+	var locates int
+	fetch := func(start, count int32) ([]byte, int, error) {
+		if count == reorgRewindDepth {
+			locates++
+		}
+		chain := b
+		if start > forkAt {
+			chain = c // every second branch response comes from c
+		}
+		return servingFetcher(t, chain)(start, count)
+	}
+	_, err := n.catchUpFrom(19, fetch)
+	if !errors.Is(err, errBranchSeam) {
+		t.Fatalf("got %v, want the seam after the attempts ran out", err)
+	}
+	if locates != maxReorgAttempts {
+		t.Fatalf("%d fork searches, want %d", locates, maxReorgAttempts)
+	}
+	if n.headers.Tip() != 14 || n.headers.TipHash() != a[14].BlockHash() {
+		t.Fatal("store moved")
+	}
+}
+
+// TestReorgStoreMovedRetried: the store moving between the fork search and the
+// swap makes SwapBranch refuse; the attempt is retried against the new tip.
+func TestReorgStoreMovedRetried(t *testing.T) {
+	const forkAt = 5
+	a, b := forkedChain(forkAt, 16, 20)
+	n := reorgNet(t, a[:15], 5)
+
+	var moved bool
+	var locates int
+	fetch := func(start, count int32) ([]byte, int, error) {
+		if count == reorgRewindDepth {
+			locates++
+		}
+		if start == forkAt && !moved {
+			moved = true
+			if err := n.headers.AppendOne(a[15]); err != nil {
+				t.Errorf("move the store: %v", err)
+			}
+		}
+		return servingFetcher(t, b)(start, count)
+	}
+	if _, err := n.catchUpFrom(19, fetch); err != nil {
+		t.Fatalf("catchUpFrom: %v", err)
+	}
+	if locates < 2 {
+		t.Fatalf("fork located %d times, want a retry after the store moved", locates)
+	}
+	if n.headers.Tip() != 19 || n.headers.TipHash() != b[19].BlockHash() {
+		t.Fatalf("tip %d, want b's tip at 19", n.headers.Tip())
+	}
+}
+
+// TestReorgLowerWork: a branch with less work than the stored span is refused
+// with errInsufficientWork, and nothing is disconnected.
+func TestReorgLowerWork(t *testing.T) {
+	const forkAt = 5
+	a, b := forkedChain(forkAt, 15, 12)
+	n := reorgNet(t, a, 5)
+	budget := maxReorgAttempts
+	disc, err := n.reorg(servingFetcher(t, b), 11, &budget)
+	if !errors.Is(err, errInsufficientWork) {
+		t.Fatalf("got %v, want errInsufficientWork", err)
+	}
+	if len(disc) != 0 || n.headers.Tip() != 14 || n.headers.TipHash() != a[14].BlockHash() {
+		t.Fatal("store moved on a lower-work branch")
+	}
+}
+
+// TestTwoSwapDisconnects: a catch-up that swaps branches twice, because the
+// server reorgs again after the first swap, returns each swap's disconnects in
+// turn with their real hashes. The list is not newest-first overall, so its
+// last entry is not the lowest height; lowestDisconnected is.
+func TestTwoSwapDisconnects(t *testing.T) {
+	const forkAt = 5
+	a, b := forkedChain(forkAt, 15, 25)
+	c := divergeFrom(b, 12, 13, 800_000) // b's reorg: shares b up to 11
+	n := reorgNet(t, a, 5)
+	switched := false
+	fetch := func(start, count int32) ([]byte, int, error) {
+		if n.headers.TipHash() == b[14].BlockHash() {
+			switched = true // the first swap landed; the server reorgs
+		}
+		chain := b
+		if switched {
+			chain = c
+		}
+		return servingFetcher(t, chain)(start, count)
+	}
+	disc, err := n.catchUpFrom(24, fetch)
+	if err != nil {
+		t.Fatalf("catchUpFrom: %v", err)
+	}
+	if n.headers.TipHash() != c[24].BlockHash() {
+		t.Fatal("store did not land on the server's final chain")
+	}
+	var want []chainhash.Hash
+	for h := 14; h >= forkAt; h-- {
+		want = append(want, a[h].BlockHash())
+	}
+	for h := 14; h >= 12; h-- {
+		want = append(want, b[h].BlockHash())
+	}
+	if len(disc) != len(want) {
+		t.Fatalf("%d disconnects, want %d", len(disc), len(want))
+	}
+	for i, d := range disc {
+		if chainhash.Hash(d.Hash) != want[i] {
+			t.Fatalf("disconnect %d at height %d is not the expected block", i, d.Height)
+		}
+	}
+	if last := disc[len(disc)-1].Height; last != 12 {
+		t.Fatalf("test setup: last disconnect at %d, want 12", last)
+	}
+	if lowest, ok := lowestDisconnected(disc); !ok || lowest != forkAt {
+		t.Fatalf("lowest disconnected %d, want %d", lowest, forkAt)
+	}
+	if lowest, _ := (&TipChange{Disconnected: disc}).LowestDisconnected(); lowest != forkAt {
+		t.Fatalf("TipChange.LowestDisconnected %d, want %d", lowest, forkAt)
+	}
+}
+
+// TestHeaderErrorPenalty pins the penalty each header-path error earns.
+func TestHeaderErrorPenalty(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	n := &Network{ctx: ctx}
+	rule := &RuleError{Height: 5, Err: errCheckpointMismatch}
+	for _, tc := range []struct {
+		name     string
+		err      error
+		fallback serverPenalty
+		want     serverPenalty
+	}{
+		{"rule error", rule, penaltyNone, penaltyQuarantine},
+		{"wrapped rule error", fmt.Errorf("electrum: reorg: %w", rule), penaltyNone, penaltyQuarantine},
+		{"insufficient work", fmt.Errorf("x: %w", errInsufficientWork), penaltyNone, penaltyFailure},
+		{"timestamp too new", fmt.Errorf("x: %w", errTimeTooNew), penaltyFailure, penaltyNone},
+		{"fork not found, live path", errForkNotFound, penaltyNone, penaltyNone},
+		{"fork not found, attach", errForkNotFound, penaltyFailure, penaltyNone},
+		{"wrapped fork not found", fmt.Errorf("electrum: reorg: %w", errForkNotFound), penaltyFailure, penaltyNone},
+		{"timeout", fmt.Errorf("fetch: %w", context.DeadlineExceeded), penaltyFailure, penaltyFailure},
+	} {
+		if got := n.headerErrorPenalty(tc.err, tc.fallback); got != tc.want {
+			t.Errorf("%s: got %d, want %d", tc.name, got, tc.want)
+		}
+	}
+	cancel()
+	if got := n.headerErrorPenalty(rule, penaltyFailure); got != penaltyNone {
+		t.Fatalf("rule error during shutdown: got %d, want none", got)
 	}
 }

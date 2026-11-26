@@ -135,6 +135,10 @@ type ElectrumClient struct {
 	// prev-block chain (the wallet stores only recent hashes post-birthday).
 	// goLive flips it true and delivers a contiguous catch-up.
 	liveDelivery bool
+	// flushedOnSync is set by tipChangeLoop once it has flushed the pending
+	// entries held back while the header store was not yet synced (see
+	// headersReady). tipChangeLoop is its only reader and writer.
+	flushedOnSync bool
 	// lastConnected is the highest height delivered as BlockConnected. New
 	// blocks are always delivered contiguously from lastConnected+1 to the
 	// header-store tip, so a suppressed or skipped tip can't leave a gap.
@@ -490,17 +494,28 @@ func (c *ElectrumClient) dispatchTipChange(ev *electrum.TipChange) {
 		return
 	}
 	connected := c.applyTip(ev)
-	if len(ev.Disconnected) > 0 {
-		// Disconnected is newest-first; the last entry is the fork
-		// height. Everything confirmed at or above it was in an orphaned
-		// block.
-		c.invalidateReorged(ev.Disconnected[len(ev.Disconnected)-1].Height)
+	if lowest, ok := ev.LowestDisconnected(); ok {
+		// Everything confirmed at or above the lowest disconnected height
+		// was in an orphaned block. A catch-up that swapped branches more
+		// than once lists each swap's blocks in turn, so the last entry is
+		// not necessarily the lowest.
+		c.invalidateReorged(lowest)
 	}
 	// Review2 #6: a scripthash status may have arrived while these headers
 	// were still in flight. Now that the headers are local and connected,
 	// flush any deferred entries so confirmed txs aren't stuck unmined.
 	// flushPending is called without connMtx held (it takes addrCacheMtx).
-	if connected > 0 {
+	//
+	// Confirmed entries that arrived before the header store was synced
+	// wait in pending too (see headersReady). The network publishes a tip
+	// change right after the initial sync completes, so the first event
+	// seen once Synced is true releases them, even while the initial rescan
+	// suppresses connects.
+	flushSynced := !c.flushedOnSync && c.net.Synced()
+	if flushSynced {
+		c.flushedOnSync = true
+	}
+	if connected > 0 || flushSynced {
 		c.flushPending()
 	}
 	// The reorg refresh fetches the history of every affected scripthash.
@@ -772,7 +787,32 @@ func (c *ElectrumClient) refetchEntry(sh string, entry *scripthashEntry,
 	if err != nil {
 		return 0, false, err
 	}
-	emitted, deferred := c.applyHistory(prev, hist)
+	emitted, waiting, failed := c.applyHistory(prev, hist)
+	deferred := append(append([]electrum.HistoryEntry(nil), waiting...), failed...)
+	fork, moved, committed := c.commitHistory(sh, entry, gen, hist, emitted, deferred, status)
+	// applyHistory may have deferred a confirmed entry because the header
+	// store was not yet synced, and the one-time flush at the sync
+	// transition (dispatchTipChange) skips entries whose pending was still
+	// empty when it looked, as this one's was until the commit above.
+	// Re-checking Synced after the commit, still under proc, closes that
+	// gap: either the sync flush has run and missed the entry, so it is
+	// flushed here, or it has not run yet and will find the committed
+	// pending. flushEntry is idempotent, so both firing is harmless. The
+	// flush covers only the entries deferred for their headers. Entries
+	// whose emission failed wait for the next tip change, so a failing
+	// server is not asked again within the same pass.
+	if committed && len(waiting) > 0 && c.net.Synced() {
+		c.flushEntry(entry, waiting)
+	}
+	return fork, moved, nil
+}
+
+// commitHistory commits a refetchEntry result to the entry under
+// addrCacheMtx, reporting a reorg that landed since generation gen as fork
+// and moved, and committed false when the entry was replaced in the cache.
+// Caller holds entry.proc.
+func (c *ElectrumClient) commitHistory(sh string, entry *scripthashEntry, gen uint64,
+	hist, emitted, deferred []electrum.HistoryEntry, status string) (fork int32, moved, committed bool) {
 
 	c.addrCacheMtx.Lock()
 	defer c.addrCacheMtx.Unlock()
@@ -783,13 +823,13 @@ func (c *ElectrumClient) refetchEntry(sh string, entry *scripthashEntry,
 	// ever removes-and-replaces an entry across the fetch window, skip
 	// rather than write a stale-derived result onto a fresh entry.
 	if e, ok := c.addrCache[sh]; !ok || e != entry {
-		return 0, false, nil
+		return 0, false, false
 	}
 	if fork, moved = c.reorgSince(gen); moved {
 		entry.lastHistory = historyBelow(emitted, fork)
 		entry.pending = historyBelow(mergePendingEntries(entry.pending, deferred), fork)
 		entry.lastStatus = ""
-		return fork, true, nil
+		return fork, true, true
 	}
 	if status == "" {
 		status = statusFromHistory(hist)
@@ -797,7 +837,7 @@ func (c *ElectrumClient) refetchEntry(sh string, entry *scripthashEntry,
 	entry.lastStatus = status
 	entry.lastHistory = emitted
 	entry.pending = mergePendingEntries(entry.pending, deferred)
-	return 0, false, nil
+	return 0, false, true
 }
 
 // reorgSince reports whether a reorg has landed since generation gen and,
@@ -843,13 +883,14 @@ func historyBelow(entries []electrum.HistoryEntry, height int32) []electrum.Hist
 // applyHistory diffs a fresh history against the entries already processed
 // (prev), emits a RelevantTx for each new entry whose block is local, and
 // returns the new carry-forward list (prev's survivors plus what was
-// emitted or skipped) and the entries deferred to pending: those whose
-// header has not arrived, and those whose emission failed (a raw-tx or
-// merkle fetch error), which the next tip change retries. A failed entry
-// left out of both lists would be lost until the server's status next
-// changed — which, for a transient failure during a rotation, could be
-// never. The caller commits both under the entry's locks.
-func (c *ElectrumClient) applyHistory(prev, hist []electrum.HistoryEntry) (emitted, deferred []electrum.HistoryEntry) {
+// emitted or skipped) and the entries deferred to pending, by cause:
+// waiting, whose header is not ready (see headersReady), and failed, whose
+// emission failed (a raw-tx or merkle fetch error), which the next tip
+// change retries. A failed entry left out of the lists would be lost until
+// the server's status next changed, which for a transient failure during a
+// rotation could be never. The caller commits all three under the entry's
+// locks.
+func (c *ElectrumClient) applyHistory(prev, hist []electrum.HistoryEntry) (emitted, waiting, failed []electrum.HistoryEntry) {
 	// Partition the new entries into "ready to emit" and "deferred until
 	// the header arrives". Already-seen entries are not re-emitted but
 	// stay in the carry-forward list.
@@ -857,6 +898,12 @@ func (c *ElectrumClient) applyHistory(prev, hist []electrum.HistoryEntry) (emitt
 	// confirmed there are pre-birthday by construction (the anchor sits
 	// below the birthday block) whether or not a rescan has set the floor.
 	floor := max(c.rescanFloor.Load(), c.net.StartHeight())
+	// Judge each (txid, height) once. A reply that repeats an entry could
+	// otherwise split its copies across a readiness change during the loop,
+	// one deferred for its header and one emitted or failed, and the
+	// deferred copy would be fetched again after the commit. The status
+	// still derives from the reply as served (see commitHistory).
+	hist = mergePendingEntries(nil, hist)
 	emitted = make([]electrum.HistoryEntry, 0, len(hist))
 	var toEmit []electrum.HistoryEntry
 	for _, h := range hist {
@@ -871,14 +918,14 @@ func (c *ElectrumClient) applyHistory(prev, hist []electrum.HistoryEntry) (emitt
 			emitted = append(emitted, h)
 			continue
 		}
-		if h.Height > 0 && c.net.HeaderByHeight(h.Height) == nil {
+		if h.Height > 0 && !c.headersReady(h.Height) {
 			// Review2 #6: do not emit a RelevantTx with
 			// blockMeta=nil for a confirmed tx. That would record
 			// the tx as unmined and the next status-change diff
 			// would treat it as already-seen, leaving it stuck
 			// unmined forever. Park it and let the tip-change
 			// dispatcher flush it once the header arrives.
-			deferred = append(deferred, h)
+			waiting = append(waiting, h)
 			continue
 		}
 		toEmit = append(toEmit, h)
@@ -895,11 +942,11 @@ func (c *ElectrumClient) applyHistory(prev, hist []electrum.HistoryEntry) (emitt
 		}
 		for _, e := range toEmit {
 			if _, did := ok[fmt.Sprintf("%s|%d", e.TxHash, e.Height)]; !did {
-				deferred = append(deferred, e)
+				failed = append(failed, e)
 			}
 		}
 	}
-	return emitted, deferred
+	return emitted, waiting, failed
 }
 
 // invalidateReorged handles a reorg whose fork height is fork: every
@@ -1026,7 +1073,8 @@ func (c *ElectrumClient) clearReorged(sh string) {
 }
 
 // mergePendingEntries adds entries from src into dst, skipping any (txid,
-// height) duplicates already present.
+// height) already in dst or earlier in src. With a nil dst it returns src
+// without repeats, in first-occurrence order.
 func mergePendingEntries(dst, src []electrum.HistoryEntry) []electrum.HistoryEntry {
 	if len(src) == 0 {
 		return dst
@@ -1080,48 +1128,72 @@ func (c *ElectrumClient) flushPending() {
 		// duplicates — exactly the lost-update the proc lock exists to
 		// prevent.
 		entry.proc.Lock()
+		c.flushEntry(entry, nil)
+		entry.proc.Unlock()
+	}
+}
 
-		c.addrCacheMtx.Lock()
-		var ready, remain []electrum.HistoryEntry
-		for _, e := range entry.pending {
-			if e.Height > 0 && c.net.HeaderByHeight(e.Height) == nil {
+// flushEntry emits the entry's pending history whose headers are ready (see
+// headersReady) and moves what was emitted to the diff baseline. A non-nil
+// only limits the flush to the pending entries it lists; the rest stay
+// pending. It is idempotent: an emitted entry leaves pending under proc, so
+// a second flush of the same entry finds nothing new. Caller holds
+// entry.proc, not addrCacheMtx.
+func (c *ElectrumClient) flushEntry(entry *scripthashEntry, only []electrum.HistoryEntry) {
+	var listed map[string]struct{}
+	if only != nil {
+		listed = make(map[string]struct{}, len(only))
+		for _, e := range only {
+			listed[fmt.Sprintf("%s|%d", e.TxHash, e.Height)] = struct{}{}
+		}
+	}
+	c.addrCacheMtx.Lock()
+	var ready, remain []electrum.HistoryEntry
+	for _, e := range entry.pending {
+		if listed != nil {
+			if _, ok := listed[fmt.Sprintf("%s|%d", e.TxHash, e.Height)]; !ok {
 				remain = append(remain, e)
 				continue
 			}
-			ready = append(ready, e)
 		}
-		entry.pending = remain
-		c.addrCacheMtx.Unlock()
-
-		// Only what was actually emitted joins the diff baseline; a
-		// transient per-entry failure (a merkle or raw-tx fetch error)
-		// returns to pending for the next flush. Committing an unemitted
-		// entry would suppress it forever — everything in lastHistory is
-		// treated as already seen, the wallet's synced height keeps
-		// advancing past it, and no future rescan walks below that — and
-		// pending now carries rescan-critical history (setup entries above
-		// the walk tip and the deferred tail of an early-finished walk),
-		// not just the rare live-path header race.
-		emitted := c.emitRelevantTxs(ready)
-
-		c.addrCacheMtx.Lock()
-		entry.lastHistory = append(entry.lastHistory, emitted...)
-		if len(emitted) < len(ready) {
-			ok := make(map[string]struct{}, len(emitted))
-			for _, e := range emitted {
-				ok[fmt.Sprintf("%s|%d", e.TxHash, e.Height)] = struct{}{}
-			}
-			var failed []electrum.HistoryEntry
-			for _, e := range ready {
-				if _, did := ok[fmt.Sprintf("%s|%d", e.TxHash, e.Height)]; !did {
-					failed = append(failed, e)
-				}
-			}
-			entry.pending = mergePendingEntries(entry.pending, failed)
+		if e.Height > 0 && !c.headersReady(e.Height) {
+			remain = append(remain, e)
+			continue
 		}
-		c.addrCacheMtx.Unlock()
+		ready = append(ready, e)
+	}
+	entry.pending = remain
+	c.addrCacheMtx.Unlock()
+	if len(ready) == 0 {
+		return
+	}
 
-		entry.proc.Unlock()
+	// Only what was actually emitted joins the diff baseline; a
+	// transient per-entry failure (a merkle or raw-tx fetch error)
+	// returns to pending for the next flush. Committing an unemitted
+	// entry would suppress it forever: everything in lastHistory is
+	// treated as already seen, the wallet's synced height keeps
+	// advancing past it, and no future rescan walks below that. Pending
+	// carries rescan-critical history (setup entries above the walk tip
+	// and the deferred tail of an early-finished walk), not just the rare
+	// live-path header race.
+	emitted := c.emitRelevantTxs(ready)
+
+	c.addrCacheMtx.Lock()
+	defer c.addrCacheMtx.Unlock()
+	entry.lastHistory = append(entry.lastHistory, emitted...)
+	if len(emitted) < len(ready) {
+		ok := make(map[string]struct{}, len(emitted))
+		for _, e := range emitted {
+			ok[fmt.Sprintf("%s|%d", e.TxHash, e.Height)] = struct{}{}
+		}
+		var failed []electrum.HistoryEntry
+		for _, e := range ready {
+			if _, did := ok[fmt.Sprintf("%s|%d", e.TxHash, e.Height)]; !did {
+				failed = append(failed, e)
+			}
+		}
+		entry.pending = mergePendingEntries(entry.pending, failed)
 	}
 }
 
@@ -1182,24 +1254,29 @@ func (c *ElectrumClient) buildRelevantTx(h electrum.HistoryEntry) (RelevantTx, e
 // emitRelevantTxs.
 const maxRawTxFetches = 8
 
-// emitRelevantTxs fetches the raw transactions for the given history entries
-// CONCURRENTLY, then enqueues a RelevantTx notification for each in the original
-// order, returning the entries that were successfully enqueued.
-//
-// The fetch is parallelized on purpose: GetRawTransaction is a per-tx network
-// round-trip and the scripthash processor that calls this is single-threaded, so
-// fetching serially made detection latency grow with the number of new
-// transactions — e.g. several receives to the same address arriving close
-// together would each wait behind the previous one's round-trip. Enqueue order
-// is preserved so any in-batch parent→child dependency stays intact for the
-// wallet.
+// headersReady reports whether a confirmation at height can be verified: the
+// header store is synced and holds the header. Before the store is synced, a
+// stored header may lie at or below a checkpoint the store has not reached,
+// where nothing has authenticated it yet. Confirmed entries that are not
+// ready wait in the scripthash entry's pending list.
+func (c *ElectrumClient) headersReady(height int32) bool {
+	return c.net.Synced() && c.net.HeaderByHeight(height) != nil
+}
+
 // verifyInclusion checks a confirmed transaction's merkle proof against the
-// LOCAL validated header at its height (multi-server rotation plan R7). The
-// header chain is anchored, retarget-checked, and PoW-bounded, so a proof
-// folding to its merkle root makes fabrication as hard as producing that
-// work; a server that cannot produce a valid proof is lying. Mempool
-// entries (height <= 0) have no proof and are not checked.
+// LOCAL validated header at its height (multi-server rotation plan R7). Once
+// the header store is synced, every stored header is either authenticated by
+// hash linkage to a checkpoint the store holds, or carries its own PoW check
+// against its declared, range-checked target. Where the chain params install
+// a NextBits rule (every mainnet), that target is also the consensus
+// difficulty for its height. A proof folding to its merkle root therefore
+// makes fabrication as hard as producing that work; a server that cannot
+// produce a valid proof is lying. Before the store is synced, nothing is
+// verified. Mempool entries (height <= 0) have no proof and are not checked.
 func (c *ElectrumClient) verifyInclusion(txid string, height int32) error {
+	if !c.net.Synced() {
+		return fmt.Errorf("electrum: header store not synced; cannot verify %s at %d", txid, height)
+	}
 	hdr := c.net.HeaderByHeight(height)
 	if hdr == nil {
 		return fmt.Errorf("electrum: no local header at %d for inclusion proof", height)
@@ -1237,6 +1314,17 @@ func (c *ElectrumClient) verifyInclusion(txid string, height int32) error {
 	return nil
 }
 
+// emitRelevantTxs fetches the raw transactions for the given history entries
+// CONCURRENTLY, then enqueues a RelevantTx notification for each in the original
+// order, returning the entries that were successfully enqueued.
+//
+// The fetch is parallelized on purpose: GetRawTransaction is a per-tx network
+// round-trip and the scripthash processor that calls this is single-threaded, so
+// fetching serially made detection latency grow with the number of new
+// transactions: several receives to the same address arriving close together
+// would each wait behind the previous one's round-trip. Enqueue order is
+// preserved so any in-batch parent→child dependency stays intact for the
+// wallet.
 func (c *ElectrumClient) emitRelevantTxs(entries []electrum.HistoryEntry) []electrum.HistoryEntry {
 	if len(entries) == 0 {
 		return nil

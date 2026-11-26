@@ -76,7 +76,7 @@ func TestHeadersDashX11Linkage(t *testing.T) {
 	}
 
 	hdrs, raw := buildDashChain(t, cfg, 4)
-	n, err := h.AppendBatch(0, raw, 0)
+	n, err := h.AppendBatch(0, raw)
 	if err != nil {
 		t.Fatalf("AppendBatch: %v", err)
 	}
@@ -145,7 +145,7 @@ func TestHeadersDashRejectsSha256dLinkage(t *testing.T) {
 	// The break is inside the batch (h0 itself is genesis), which is a
 	// server fault rather than a reorg signal: refused outright, nothing
 	// appended.
-	if _, err := h.AppendBatch(0, raw.Bytes(), 0); err == nil {
+	if _, err := h.AppendBatch(0, raw.Bytes()); err == nil {
 		t.Fatal("sha256d-linked batch accepted")
 	} else if errors.Is(err, errHeaderDoesNotConnect) {
 		t.Fatalf("interior link break reported as a reorg signal: %v", err)

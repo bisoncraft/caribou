@@ -98,6 +98,9 @@ var LTCParams = map[string]*netparams.ChainParams{
 		RetargetAdjustmentFactor: 4,                                       // 25% less, 400% more
 		ReduceMinDifficulty:      false,
 		MinDiffReductionTime:     0,
+		// The first retarget above a checkpoint at boundary B samples the
+		// timestamp of block B-1 (see LitecoinNextBits).
+		DifficultyLookback: 1,
 		// Checkpoints ordered from oldest to newest. The first is the launch
 		// anchor: the last retarget boundary mined before
 		// DefaultWalletBirthday (2026-07-01). The electrum header store
@@ -110,18 +113,23 @@ var LTCParams = map[string]*netparams.ChainParams{
 		// The livenet TestCheckpointRecords in the spv package fetches each
 		// header and filter header from P2P peers, checks the header against
 		// the hash, and requires the peers to agree on the filter header.
+		// Difficulty holds the bits and timestamp of the block below each
+		// checkpoint, derived by that test from headers linked back to the
+		// checkpoint header.
 		Checkpoints: []netparams.Checkpoint{
 			{
 				Height:       3132864, // 2026-06-28
 				Hash:         newHashFromStr("22076f9f6295e025e4b53c021b936e9f482888734536e86b6ffb7442038c14f4"),
 				Header:       newHeaderFromStr("14000020069c16322f35fadf71c5a3951fc4c6e2ef3139e6b97d2630e211457b23539c61c52a1638a6586a3b4ed2094473b1e0916e4c0ee3b96a3f0e81eb708bd03331ad650b416a7c482f198040f9c4"),
 				FilterHeader: newHashFromStr("bc2cce0376dad660ca4855dc9b7c204d0def5766c3d08d71b6748dff31717e93"),
+				Difficulty:   []netparams.BlockDifficulty{{Bits: 0x192d25d2, Timestamp: 1782647569}},
 			},
 			{
 				Height:       3185280, // 2026-09-27
 				Hash:         newHashFromStr("be08d745b1dcf064fb8d725662070a3c3461a9b02f0889a106dbe709bda8547e"),
 				Header:       newHeaderFromStr("00000020ace651653dbc6ac7747f0fec1cee48d49300f2edcf4ce0209367029575dfe18f5bd989d655e967a6147ed828a9ac7876ebeff58791eb731e1bb629421c9c455ed515b96adda82e19819dfbbb"),
 				FilterHeader: newHashFromStr("a15fd93e9ecb079386fc9a998f418cb4331e80f9e97d9de828b13f085107edd3"),
+				Difficulty:   []netparams.BlockDifficulty{{Bits: 0x192e0c95, Timestamp: 1790514548}},
 			},
 		},
 		Bech32HRPSegwit:         "ltc",                           // always ltc for main net
@@ -313,20 +321,122 @@ JF0LTH0Kr986wDhHDvdCIaV6DR4s7w==
 // LTC electrumx server. Decoded at init; a malformed constant panics at startup.
 var ltcMainnetCert = netparams.MustParseCertPEM(ltcMainnetCertPEM)
 
+// Shipped certificate pins for further self-signed LTC mainnet servers,
+// fetched and checked as described for the BTC pins (assets/btc.go), on
+// 2026-11-17. ltc.aftrek.org's certificate expires 2028-03-27, under two
+// years from the fetch, so that server is left to trust on first use.
+
+// ltcBackupElectrumCertPEM is the TLS leaf certificate of backup.electrum-ltc.org:443,
+// self-signed and valid until 2037-12-19.
+const ltcBackupElectrumCertPEM = `-----BEGIN CERTIFICATE-----
+MIIDoTCCAomgAwIBAgIJAIln3N4Wi0HIMA0GCSqGSIb3DQEBCwUAMGcxCzAJBgNV
+BAYTAk5MMRMwEQYDVQQIDApTb21lLVN0YXRlMSEwHwYDVQQKDBhJbnRlcm5ldCBX
+aWRnaXRzIFB0eSBMdGQxIDAeBgNVBAMMF2JhY2t1cC5lbGVjdHJ1bS1sdGMub3Jn
+MB4XDTE3MTIxOTExMzgwMloXDTM3MTIxOTExMzgwMlowZzELMAkGA1UEBhMCTkwx
+EzARBgNVBAgMClNvbWUtU3RhdGUxITAfBgNVBAoMGEludGVybmV0IFdpZGdpdHMg
+UHR5IEx0ZDEgMB4GA1UEAwwXYmFja3VwLmVsZWN0cnVtLWx0Yy5vcmcwggEiMA0G
+CSqGSIb3DQEBAQUAA4IBDwAwggEKAoIBAQCoNlT9UYBNlMz98jpMlgA0+D/3VVbW
+mrnFDibeQqFRVpcOAUZWW+rrqXK8zqS9AjC7FCaxLfpNI9N4KFVL8OtDu+Qx8QsG
+OqGtFSOW9QvAH2MXCFGxlwMC+U6qURtg1er8pwQLLuex2CglKP3eKBW/X/jPhrdo
+InnhwHipDHyMQD5vugN2Ebl1yvaROviQ7mj9CRGmrIO97nK0a7sZsAE94N5CSYlf
+6zWuvlHWenNINCZIPH1meiaiDqPSnOB1tZteufH7dC+LklZL/UcyKKi1bxRUHcTi
+TG+piQk+LCBJ9qulwEUJs+bDScbZT6vOn46TqLY9oCLgr32xO77ZN7kRAgMBAAGj
+UDBOMB0GA1UdDgQWBBQrc0ViACsbzdMYUGnH/8fOzU7+ozAfBgNVHSMEGDAWgBQr
+c0ViACsbzdMYUGnH/8fOzU7+ozAMBgNVHRMEBTADAQH/MA0GCSqGSIb3DQEBCwUA
+A4IBAQBcWlX5CwamLYcUGx2Iw563fv0tGwK0+O9plz9Z47TuA4ztYQMEpzru4ymZ
+cxLvY8puDeckZdO3esO06SScIM3tPTp6IwqvsDwfRxaSHqDofj5Eaa8qdFfBYvo3
+A1zDeCg7u0FGFJcsyYF1YtcNGYrrZWBLuUg5X6Zc7iQVacsHLhtzYCmGicHeoz4T
+dGQxBCnESfsc94YsMy0UNDa1XnsuCFE+VvbHdl1sxua01HTh0tqPxwpLD8RUyfOC
+k2Uzp9IFi4+78fNwYHiYWv7Af9QzP0nbdOZ1m/VB5X51bzNuEEV7aWX5zIyhT1Cr
+o1P3eogvzteEEJzA/aqFFOsfwTS0
+-----END CERTIFICATE-----`
+
+// ltcXuriousCertPEM is the TLS leaf certificate of electrum.ltc.xurious.com:50002,
+// self-signed and valid until 2036-05-03.
+const ltcXuriousCertPEM = `-----BEGIN CERTIFICATE-----
+MIIDeTCCAmECFB2oKN64YSNngBxiNlHvoT0rXgA6MA0GCSqGSIb3DQEBCwUAMHkx
+CzAJBgNVBAYTAlVTMRIwEAYDVQQIDAlXaXNjb25zaW4xEDAOBgNVBAcMB01hZGlz
+b24xITAfBgNVBAoMGEludGVybmV0IFdpZGdpdHMgUHR5IEx0ZDEhMB8GA1UEAwwY
+ZWxlY3RydW0ubHRjLnh1cmlvdXMuY29tMB4XDTI2MDUwNDA4MTA0N1oXDTM2MDUw
+MzA4MTA0N1oweTELMAkGA1UEBhMCVVMxEjAQBgNVBAgMCVdpc2NvbnNpbjEQMA4G
+A1UEBwwHTWFkaXNvbjEhMB8GA1UECgwYSW50ZXJuZXQgV2lkZ2l0cyBQdHkgTHRk
+MSEwHwYDVQQDDBhlbGVjdHJ1bS5sdGMueHVyaW91cy5jb20wggEiMA0GCSqGSIb3
+DQEBAQUAA4IBDwAwggEKAoIBAQCX9wIBrEk/ATsqOpnP4WcAqgBP1Rp5NSLpCR75
+WWBeENa/C8KO0gyKwQdvIVbFhn5w1QurhO5eb+vBnoeGY+4DrqAwO1PxNuWxQMxI
+XsgcV3aN2WL9d1AAutoSZznaKCI379OgJGVInkqqNSZRxtqeW4TGT1r65sJYY9Ps
+w+/g9ewf/sWQONOAskOqeELVi7D5/qOzs9vEmlMoSq2p0tZFfdFfyG+p/2nmqy9B
+UW9fb4qf/5vNFBK0P4nbXXx3h+e0mzV5YbEVkxsgtVyiZP1JDI8DP+ZEnukjP9q0
+VRaSJNvAbkGSYqA1XjjNnugqnX3C21CyWn4ba0a8t24sE2ezAgMBAAEwDQYJKoZI
+hvcNAQELBQADggEBACiLrWtH49eBG1WweWOZl88wS6aahAsu1F4dU4Prex0pzKSM
+3q5T4G/M4f8XtJJV9nCIAvBsUPffYm2mxnzAbz0LQ41p6S4Vvli0I+wG9lenO+iI
+9j5oLUmeL1kbQarF1ULJeSHJRWr3p63gHOkxvnyKcBfbK4/M+IdcLxcOo0jI8xlf
+Q/phQk593QedwpkHdArR7Q6XtJMAwz1rMk8VZ/iZni5wdaQk36KYoJ1EHBaiaX5i
+qA76H6aDGkq5K0HjZ48jYmP+TKzoBqKTZ8m0UYtm1oq/TEPiADPCZjsUonTCkMJ5
+72GhUWxzWKr1jz3zvd2yRc8BJadNAfa6XIe8kI4=
+-----END CERTIFICATE-----`
+
+// ltcFemCertPEM is the TLS leaf certificate of l.fem.sh:50002, self-signed
+// and valid until 2030-05-04.
+const ltcFemCertPEM = `-----BEGIN CERTIFICATE-----
+MIIDETCCAfkCFEd+bJx3g8jCpUmUep9YYl5My+vEMA0GCSqGSIb3DQEBCwUAMEUx
+CzAJBgNVBAYTAkFVMRMwEQYDVQQIDApTb21lLVN0YXRlMSEwHwYDVQQKDBhJbnRl
+cm5ldCBXaWRnaXRzIFB0eSBMdGQwHhcNMjUwNTA1MTIzNDExWhcNMzAwNTA0MTIz
+NDExWjBFMQswCQYDVQQGEwJBVTETMBEGA1UECAwKU29tZS1TdGF0ZTEhMB8GA1UE
+CgwYSW50ZXJuZXQgV2lkZ2l0cyBQdHkgTHRkMIIBIjANBgkqhkiG9w0BAQEFAAOC
+AQ8AMIIBCgKCAQEAxdnFUfBKX+s9M3pCksohbQxsbIpF5izw+R738OesAGXpT7qF
+hW+wE2JejnkDmXRxe7ttQccOeaSi1RPwRJ4mP6X/Sp8DU+LaujjgrO9R1YcJwH5H
+grPktaQ+L7f+2vWnt010Vd6Un/S7KqlIB5z5ibpzS8+Oa3CsjKjnax6OMDUppUOm
+v10I/17hly1c54kSb+88THzz+S5WwarEZw5gq0LZB5r0tKBg7PseDKRYoNWd0as1
+5lNlOE1hDLMd2wzn4RDgd/mLTa/olp9IoCpgnXUKSWHNash9JPDJoy2eDD+KRNEJ
+pMCuSJb2O1HjC40LIazyy9iUnk6QPbkWMxPkawIDAQABMA0GCSqGSIb3DQEBCwUA
+A4IBAQBn3Ca6fiy5okzxyFnwZZHkw2Bjr6SqvAJpIAERSIZZTzHMbbz9oIKfOWaO
+1r1+x87ck73H4LcOby9jFfiSBmPBvOXkD3roHA5svw+fQgy8ujcpryP0fPrU7kfv
+GULJzXyB261kMqlZ2voE2V2gJAnqVF+pMQOiAxVHdD0MECHKqsNz4Zz6KnPKCsJy
+ilwSlsGA6w9UyDbjY2/cHJjZFt9Q7/0WmRjr8+Fs9Sa7sFgoAWWAEzskIeEJDo9I
+KpdlzyeQKKmVctkRtog7NPN3v8cY2ydQM8Fr+WDZbexeRxqyURekyd51dHK26j6o
+GDB1+VaQx6DTc17MrdcpAxot23qy
+-----END CERTIFICATE-----`
+
+// DER forms of the shipped LTC pins, decoded at init.
+var (
+	ltcBackupElectrumCert = netparams.MustParseCertPEM(ltcBackupElectrumCertPEM)
+	ltcXuriousCert        = netparams.MustParseCertPEM(ltcXuriousCertPEM)
+	ltcFemCert            = netparams.MustParseCertPEM(ltcFemCertPEM)
+)
+
 // ltcMainnetElectrumServers are the built-in electrum servers for LTC
 // mainnet, in preference order (see the BTC list comment for the election
-// and certificate conventions; entries without SkipVerify present CA-issued
-// certificates). Sourced from live server.peers.subscribe discovery and
-// verified with a protocol handshake and genesis check 2026-07-09; the
-// bysh.me certificate is self-signed and pinned.
+// and certificate conventions). Entries with neither Cert nor SkipVerify
+// present CA-issued certificates; ltc.aftrek.org's key is learned on first
+// use.
+//
+// Verified 2026-11-17 in three probe passes between 21:59 and 22:15 UTC: TLS
+// reachable, protocol 1.4 or later, LTC genesis, tip agreeing with the other
+// servers, and blockchain.block.headers serving 2016 linked headers from each
+// checkpoint, starting at the checkpoint's hash. ltc.rentonisk.com refused
+// connections in every pass and is kept last among the CA servers.
+//
+// The order spreads the leading entries across inferred operator groups and
+// AS networks; the groups rest on shared operator signals, not proof of
+// ownership. electrum-ltc.bysh.me and backup.electrum-ltc.org share a
+// donation address, banner and hosting network (LeaseWeb Amsterdam).
+// electrum.ltc.xurious.com is grouped with them on timing alone: its
+// self-signed certificate and bysh.me's were issued four minutes apart on
+// 2026-05-04 with the same ten-year term. Hetzner hosts jhoenicke, cipig and
+// aftrek. A group of about 27 servers advertised through peer discovery
+// under one donation address is left out, so that one group does not gain
+// weight in the election.
 var ltcMainnetElectrumServers = []*netparams.ServerAddr{
 	{Proto: "ssl", Addr: "electrum-ltc.bysh.me:50002", Cert: ltcMainnetCert},
-	{Proto: "ssl", Addr: "ltc.rentonisk.com:50002"},
 	{Proto: "ssl", Addr: "electrum.jhoenicke.de:50091"},
 	{Proto: "ssl", Addr: "electrum.petrkr.net:60002"},
 	{Proto: "ssl", Addr: "fallacy.fiatfaucet.com:50002"},
-	{Proto: "ssl", Addr: "backup.electrum-ltc.org:443", SkipVerify: true},
-	{Proto: "ssl", Addr: "electrum.ltc.xurious.com:50002", SkipVerify: true},
+	{Proto: "ssl", Addr: "cryptod.bruijn.nu:50002"},
+	{Proto: "ssl", Addr: "l.fem.sh:50002", Cert: ltcFemCert},
+	{Proto: "ssl", Addr: "ltc.electrum1.cipig.net:20063"},
+	{Proto: "ssl", Addr: "backup.electrum-ltc.org:443", Cert: ltcBackupElectrumCert}, // grouped with bysh.me
+	{Proto: "ssl", Addr: "ltc.rentonisk.com:50002"},
+	{Proto: "ssl", Addr: "electrum.ltc.xurious.com:50002", Cert: ltcXuriousCert}, // grouped with bysh.me
 	{Proto: "ssl", Addr: "ltc.aftrek.org:50002", SkipVerify: true},
 }
 

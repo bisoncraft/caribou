@@ -44,9 +44,14 @@ type DisconnectedBlock struct {
 
 // TipChange is the structured event Network publishes when its header chain
 // advances or rewinds. Consumers translate it into chain.Backend
-// notifications: BlockDisconnected for each Disconnected entry (in order,
-// which is newest-first / disconnect order) and BlockConnected for each
-// Connected height (oldest-first / connect order).
+// notifications: BlockDisconnected for each Disconnected entry, in order, and
+// BlockConnected for each Connected height (oldest-first / connect order).
+//
+// Disconnected is in disconnect order: each branch swap's blocks newest-first,
+// and swaps in the order they happened. One catch-up can swap more than once
+// (the server reorgs again mid-catch-up), so the list as a whole need not be
+// newest-first and its last entry need not be the lowest height. Consumers
+// that need the lowest affected height use LowestDisconnected.
 //
 // Either or both slices may be populated in a single event:
 //   - Pure advance: Connected populated, Disconnected empty.
@@ -57,6 +62,26 @@ type DisconnectedBlock struct {
 type TipChange struct {
 	Disconnected []DisconnectedBlock
 	Connected    []int32 // heights newly appended; queryable via HeaderByHeight
+}
+
+// LowestDisconnected returns the lowest height among Disconnected, the lowest
+// height whose block the event orphaned, and false when nothing was
+// disconnected.
+func (tc *TipChange) LowestDisconnected() (int32, bool) {
+	return lowestDisconnected(tc.Disconnected)
+}
+
+// lowestDisconnected returns the lowest height in disc, and false when disc
+// is empty. See TipChange for why the last entry is not enough.
+func lowestDisconnected(disc []DisconnectedBlock) (int32, bool) {
+	if len(disc) == 0 {
+		return 0, false
+	}
+	lowest := disc[0].Height
+	for _, d := range disc[1:] {
+		lowest = min(lowest, d.Height)
+	}
+	return lowest, true
 }
 
 // HistoryEntry is one element of a `blockchain.scripthash.get_history` reply.

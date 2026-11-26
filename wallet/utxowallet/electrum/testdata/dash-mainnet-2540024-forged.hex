@@ -1,0 +1,4 @@
+# A header at height 2540024 that links to Dash mainnet block 2540023 and is
+# mined to the PowLimit target (bits 0x1e0ffff0). Its proof of work is valid;
+# its bits are not the ones Dark Gravity Wave requires.
+00000020823659261abdc3de9f497aa0999b2f13036a2d99abf95841020000000000000027f0af65426f8b3a5eb09673c24f6e82dcdcc92591a353413e55ed71f0956ecfaa15ab6af0ff0f1efd6e0d00

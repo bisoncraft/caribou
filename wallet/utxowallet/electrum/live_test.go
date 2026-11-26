@@ -81,10 +81,12 @@ func regtestParams(t *testing.T, p *chaincfg.Params) *netparams.ChainParams {
 		// least once during the live sync. BTC regtest's full chain
 		// is too volatile for higher checkpoints.
 		Checkpoints: []netparams.Checkpoint{{Height: 0, Hash: p.GenesisHash}},
-		// Regtest doesn't retarget; record that so the retarget
-		// validator skips. Without this, every 2016-block boundary
-		// would expect a retarget that never happens on regtest.
+		// Regtest doesn't retarget. The electrum package keys its
+		// difficulty check on NextBits, which stays nil here.
 		PoWNoRetargeting: true,
+		// The observer loop sizes its lag window in blocks from the
+		// block interval and divides by it.
+		TargetTimePerBlock: p.TargetTimePerBlock,
 	}
 }
 
@@ -104,7 +106,9 @@ func ltcRegtestParams(t *testing.T) *netparams.ChainParams {
 	return &netparams.ChainParams{
 		Chain:       "ltc",
 		GenesisHash: h,
-		PowLimit:    new(big.Int), // unused in this test
+		// Regtest PowLimit (2^255-1); every header's target is
+		// range-checked against it.
+		PowLimit: new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 255), big.NewInt(1)),
 		// Litecoin PoW is scrypt(header), not SHA256d. The header
 		// validation path in Headers.checkPoW delegates to this hook
 		// when present, falling back to SHA256d when nil — without
@@ -113,10 +117,13 @@ func ltcRegtestParams(t *testing.T) *netparams.ChainParams {
 		// wallet/utxowallet/assets/ltc.go for the production
 		// equivalent.
 		CheckPoW: checkPoWScryptForTest,
-		// Genesis-pinned checkpoint and regtest no-retarget flag for
-		// the same reasons as the BTC params above.
+		// Genesis-pinned checkpoint and regtest no-retarget flag, as
+		// in the BTC params above.
 		Checkpoints:      []netparams.Checkpoint{{Height: 0, Hash: h}},
 		PoWNoRetargeting: true,
+		// Litecoin's 2.5-minute block interval, read by the observer
+		// loop's lag window as in the BTC params above.
+		TargetTimePerBlock: 150 * time.Second,
 	}
 }
 
@@ -206,16 +213,18 @@ func TestLiveNetworkSyncHeaders(t *testing.T) {
 			if err != nil {
 				t.Fatalf("NewNetwork: %v", err)
 			}
-			// With the per-header PoW window in place, only the
-			// trailing recentPoWWindow headers are scrypt-checked
-			// for LTC; older headers fall through to retarget +
-			// checkpoint validation. 30s is plenty.
+			// The genesis checkpoint is the newest, so every header
+			// above it is PoW-checked (scrypt for LTC). Harness chains
+			// run to tens of thousands of blocks, which the parallel
+			// PoW check covers in seconds.
 			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel()
 			if err := net.Start(ctx); err != nil {
 				t.Fatalf("Start: %v", err)
 			}
-			defer net.Stop()
+			// Wait out the shutdown: the server pool persists to the data
+			// dir as the network stops, which would race TempDir cleanup.
+			defer stopAndWait(net)
 
 			// Start now returns promptly; the initial header sync runs in
 			// the background. Poll until Synced() is true or the context
@@ -319,7 +328,9 @@ func TestLiveFailover(t *testing.T) {
 	if err := net.Start(ctx); err != nil {
 		t.Fatalf("Start did not fail over past the dead candidate: %v", err)
 	}
-	defer net.Stop()
+	// Wait out the shutdown: the server pool persists to the data
+	// dir as the network stops, which would race TempDir cleanup.
+	defer stopAndWait(net)
 
 	net.mu.RLock()
 	got := net.node.Addr().Addr

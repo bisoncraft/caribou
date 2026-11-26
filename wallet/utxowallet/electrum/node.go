@@ -70,7 +70,18 @@ type Node struct {
 //
 // If torProxy is non-empty (e.g. "127.0.0.1:9050"), the connection is dialed
 // through a local SOCKS5 proxy.
+//
+// A shipped pin (addr.Cert) is enforced by key, whatever its expiry; learned
+// pins need the server pool and go through Network.dialServer.
 func NewNode(ctx context.Context, addr *ServerAddr, torProxy string, expectedGenesis string) (*Node, error) {
+	return newNodePinned(ctx, addr, torProxy, expectedGenesis, shippedPolicy(addr))
+}
+
+// newNodePinned is NewNode with an explicit certificate check (see
+// tlsPolicy).
+func newNodePinned(ctx context.Context, addr *ServerAddr, torProxy string, expectedGenesis string,
+	policy *tlsPolicy) (*Node, error) {
+
 	if err := addr.Validate(); err != nil {
 		return nil, err
 	}
@@ -81,7 +92,7 @@ func NewNode(ctx context.Context, addr *ServerAddr, torProxy string, expectedGen
 
 	opts := &dialOptions{SOCKS5Proxy: torProxy}
 	if addr.Proto == "ssl" {
-		opts.TLSConfig = serverTLSConfig(addr, host)
+		opts.TLSConfig = serverTLSConfig(addr, host, policy)
 	}
 
 	srv, err := dial(ctx, addr.Addr, opts)
@@ -121,46 +132,36 @@ func NewNode(ctx context.Context, addr *ServerAddr, torProxy string, expectedGen
 	return n, nil
 }
 
-// serverTLSConfig builds the tls.Config for an "ssl" electrum server, selecting
-// one of three verification modes:
+// serverTLSConfig builds the tls.Config for an "ssl" electrum server. A pin
+// check (shipped or learned key, or a first-use enrollment) disables the
+// default chain and hostname verification and runs in VerifyConnection
+// instead; the pinned key is the server's identity, so the hostname is not
+// separately checked. A SkipVerify server with no pin check is not verified
+// at all (testnets and loopback). Otherwise the certificate is verified
+// against the system roots.
 //
-//   - Pinned (addr.Cert set): the leaf certificate the server presents must
-//     byte-match the pinned DER. Used for self-signed servers that cannot chain
-//     to a public CA. Default chain/hostname verification is disabled in favor
-//     of the exact-cert pin.
-//   - Skip (addr.SkipVerify): no verification at all. Only for dev/testnet/simnet
-//     servers with throwaway self-signed certificates.
-//   - CA (neither set): standard verification against the host's system root
-//     store. Used for public mainnet servers with CA-issued certificates, and
-//     survives certificate rotation (e.g. Let's Encrypt renewals).
-func serverTLSConfig(addr *ServerAddr, host string) *tls.Config {
+// ClientSessionCache stays nil: session resumption is off, so every
+// connection runs a full handshake and the server proves possession of its
+// key each time. VerifyConnection runs on resumed sessions as well, unlike
+// VerifyPeerCertificate, so the check would hold even with a cache.
+func serverTLSConfig(addr *ServerAddr, host string, policy *tlsPolicy) *tls.Config {
 	cfg := &tls.Config{
 		MinVersion: tls.VersionTLS12,
 		ServerName: host,
 	}
 	switch {
-	case len(addr.Cert) > 0:
-		pinned := addr.Cert
-		// Disable the default chain/hostname check; the pin below is the
-		// verification. The pinned leaf is the server's identity, so the
-		// hostname is not separately checked.
-		cfg.InsecureSkipVerify = true //nolint:gosec // verified by the pin in VerifyPeerCertificate
-		cfg.VerifyPeerCertificate = func(rawCerts [][]byte, _ [][]*x509.Certificate) error {
-			if len(rawCerts) == 0 {
-				return errors.New("electrum: server presented no certificate")
-			}
-			if !bytes.Equal(rawCerts[0], pinned) {
-				return fmt.Errorf("electrum: %s certificate does not match the pinned certificate", addr.Addr)
-			}
-			return nil
-		}
+	case policy != nil && policy.mode != pinNone:
+		cfg.InsecureSkipVerify = true //nolint:gosec // verified by the pin check in VerifyConnection
+		cfg.VerifyConnection = policy.verify(addr.Addr)
 	case addr.SkipVerify:
-		cfg.InsecureSkipVerify = true //nolint:gosec // dev/testnet/simnet self-signed certificates
+		cfg.InsecureSkipVerify = true //nolint:gosec // testnet/simnet self-signed certificates
 	}
-	// Default: InsecureSkipVerify false and RootCAs nil → verify against the
-	// system root store.
 	return cfg
 }
+
+// peerLeaf returns the leaf certificate the server presented, or nil for a
+// connection without TLS.
+func (n *Node) peerLeaf() *x509.Certificate { return n.server.peerLeaf() }
 
 // Addr returns the server address this node is connected to.
 func (n *Node) Addr() *ServerAddr { return n.addr }

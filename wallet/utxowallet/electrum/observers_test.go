@@ -7,6 +7,7 @@ package electrum
 import (
 	"context"
 	"errors"
+	"math/big"
 	"net"
 	"testing"
 	"time"
@@ -24,8 +25,11 @@ import (
 func mineTestHeader(t *testing.T, prev chainhash.Hash, bits uint32, seed uint32) *wire.BlockHeader {
 	t.Helper()
 	target := blockchain.CompactToBig(bits)
+	// A zero Timestamp serializes as a uint32 wrap of year 1 (2042), which
+	// the future-timestamp bound rejects; any fixed past time works.
+	ts := time.Unix(1_600_000_000, 0)
 	for nonce := seed; ; nonce++ {
-		hdr := &wire.BlockHeader{Version: 4, PrevBlock: prev, Bits: bits, Nonce: nonce}
+		hdr := &wire.BlockHeader{Version: 4, PrevBlock: prev, Bits: bits, Nonce: nonce, Timestamp: ts}
 		hash := hdr.BlockHash()
 		if blockchain.HashToBig(&hash).Cmp(target) <= 0 {
 			return hdr
@@ -195,65 +199,68 @@ func TestAttachNodePurgesSelfObserver(t *testing.T) {
 	}
 }
 
+// TestAuditDissent: the dissent audit validates the observer's batch as a
+// branch of the store rooted below the audit window and reports its work. It
+// refuses a batch that does not end at the advertised tip, does not link to
+// the store below the window, breaks inside, fails a hash, or crosses a
+// checkpoint on another branch.
 func TestAuditDissent(t *testing.T) {
-	const easyBits = 0x207fffff   // regtest-grade: nearly free to "mine"
-	const harderBits = 0x1f00ffff // 128x more work per header
-
-	headerHash := func(hdr *wire.BlockHeader) chainhash.Hash {
-		return hdr.BlockHash()
+	const forkAt, start = 6, 4
+	ours, theirs := forkedChain(forkAt, 12, 14)
+	newNet := func(p *netparams.ChainParams) *Network {
+		return &Network{cfg: &Config{Chain: testChainConfig()}, headers: storeWith(t, p, ours)}
 	}
+	n := newNet(paramsWithCheckpoints(nil))
+	batch := theirs[start:]
+	tip := theirs[len(theirs)-1].BlockHash()
 
-	pow := func(hdr *wire.BlockHeader) error {
-		hash := hdr.BlockHash()
-		if blockchain.HashToBig(&hash).Cmp(blockchain.CompactToBig(hdr.Bits)) > 0 {
-			return errors.New("pow")
-		}
-		return nil
-	}
-
-	mkChain := func(n int, bits uint32) []*wire.BlockHeader {
-		var out []*wire.BlockHeader
-		prev := chainhash.Hash{}
-		for i := 0; i < n; i++ {
-			hdr := mineTestHeader(t, prev, bits, uint32(i)*1000)
-			out = append(out, hdr)
-			prev = hdr.BlockHash()
-		}
-		return out
-	}
-
-	linked := mkChain(4, easyBits)
-	tip := linked[len(linked)-1].BlockHash()
-
-	// A linked, PoW-valid batch audits clean and reports its work.
-	work, err := auditDissent(linked, tip, headerHash, pow)
+	work, err := n.auditDissent(start, batch, tip)
 	if err != nil {
-		t.Fatalf("linked batch rejected: %v", err)
+		t.Fatalf("valid dissent rejected: %v", err)
+	}
+	if want := new(big.Int).Mul(blockchain.CalcWork(0x207fffff), big.NewInt(int64(len(batch)))); work.Cmp(want) != 0 {
+		t.Fatalf("work %s, want %s", work, want)
 	}
 
-	// Self-attested trivial difficulty MUST lose the work comparison the
-	// caller performs: 4 easy headers carry less work than one harder one.
-	if harder := blockchain.CalcWork(harderBits); work.Cmp(harder) >= 0 {
-		t.Fatalf("4 easy headers (%s) should not outweigh one harder header (%s)",
-			work, harder)
+	if _, err := n.auditDissent(start, batch, chainhash.Hash{1}); err == nil {
+		t.Fatal("batch not ending at the advertised tip accepted")
 	}
-
-	// Broken linkage is rejected.
-	broken := mkChain(4, easyBits)
-	broken[2].PrevBlock = chainhash.Hash{0xde, 0xad}
-	if _, err := auditDissent(broken, broken[3].BlockHash(), headerHash, pow); err == nil {
-		t.Fatal("unlinked batch accepted")
-	}
-
-	// A batch not ending at the advertised tip is rejected — the observer
-	// must be audited on the chain it actually advertised.
-	if _, err := auditDissent(linked, chainhash.Hash{1}, headerHash, pow); err == nil {
-		t.Fatal("wrong-tip batch accepted")
-	}
-
-	// Empty batches are rejected.
-	if _, err := auditDissent(nil, tip, headerHash, pow); err == nil {
+	if _, err := n.auditDissent(start, nil, tip); err == nil {
 		t.Fatal("empty batch accepted")
+	}
+	// Rooted one height too high, the batch's first header does not link
+	// to the stored header below the window.
+	if _, err := n.auditDissent(start+1, batch, tip); !errors.Is(err, errHeaderDoesNotConnect) {
+		t.Fatalf("batch not linking to the store: got %v, want errHeaderDoesNotConnect", err)
+	}
+
+	broken := append([]*wire.BlockHeader(nil), batch...)
+	bad := *broken[4]
+	bad.PrevBlock = chainhash.Hash{0xde, 0xad}
+	mineHeader(&bad)
+	broken[4] = &bad
+	broken = relink(broken, 4)
+	if _, err := n.auditDissent(start, broken, broken[len(broken)-1].BlockHash()); err == nil {
+		t.Fatal("batch breaking inside accepted")
+	} else if height, ok := isRuleError(err); !ok || height != start+4 {
+		t.Fatalf("interior break: got %v, want a RuleError at %d", err, start+4)
+	}
+
+	unmined := append([]*wire.BlockHeader(nil), batch...)
+	unmined[5] = unminedHeader(unmined[4].BlockHash(), unmined[5].Timestamp)
+	unmined = relink(unmined, 5)
+	if height, ok := isRuleError(func() error {
+		_, err := n.auditDissent(start, unmined, unmined[len(unmined)-1].BlockHash())
+		return err
+	}()); !ok || height != start+5 {
+		t.Fatalf("unmined header was not a RuleError at %d", start+5)
+	}
+
+	// A checkpoint the store holds at 8; the dissent crosses it on its own
+	// branch.
+	cp := newNet(paramsWithCheckpoints([]netparams.Checkpoint{{Height: 8, Hash: ptrHash(ours[8].BlockHash())}}))
+	if _, err := cp.auditDissent(start, batch, tip); !errors.Is(err, errCheckpointMismatch) {
+		t.Fatalf("dissent across a checkpoint: got %v, want errCheckpointMismatch", err)
 	}
 }
 

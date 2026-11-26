@@ -9,9 +9,11 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
+	"errors"
 	"math/big"
 	"testing"
 	"time"
@@ -38,43 +40,63 @@ func selfSignedDER(t *testing.T) []byte {
 	return der
 }
 
+// TestServerTLSConfigPinned: a shipped pin is checked by key in
+// VerifyConnection, which also runs on resumed sessions, and session
+// resumption stays off.
 func TestServerTLSConfigPinned(t *testing.T) {
 	der := selfSignedDER(t)
 	other := selfSignedDER(t)
+	addr := &ServerAddr{Proto: "ssl", Addr: "host:50002", Cert: der}
 
-	cfg := serverTLSConfig(&ServerAddr{Proto: "ssl", Addr: "host:50002", Cert: der}, "host")
+	cfg := serverTLSConfig(addr, "host", shippedPolicy(addr))
 	if !cfg.InsecureSkipVerify {
 		t.Fatal("pinned mode should disable default chain verification")
 	}
-	if cfg.VerifyPeerCertificate == nil {
-		t.Fatal("pinned mode should set VerifyPeerCertificate")
+	if cfg.VerifyConnection == nil || cfg.VerifyPeerCertificate != nil {
+		t.Fatal("pinned mode should check in VerifyConnection")
+	}
+	if cfg.ClientSessionCache != nil {
+		t.Fatal("session resumption must stay off")
 	}
 	if cfg.ServerName != "host" {
 		t.Fatalf("ServerName = %q, want host", cfg.ServerName)
 	}
-	if err := cfg.VerifyPeerCertificate([][]byte{der}, nil); err != nil {
+	state := func(ders ...[]byte) tls.ConnectionState {
+		var cs tls.ConnectionState
+		for _, d := range ders {
+			c, err := x509.ParseCertificate(d)
+			if err != nil {
+				t.Fatalf("ParseCertificate: %v", err)
+			}
+			cs.PeerCertificates = append(cs.PeerCertificates, c)
+		}
+		return cs
+	}
+	if err := cfg.VerifyConnection(state(der)); err != nil {
 		t.Fatalf("matching pinned cert should verify: %v", err)
 	}
-	if err := cfg.VerifyPeerCertificate([][]byte{other}, nil); err == nil {
-		t.Fatal("non-matching cert should be rejected")
+	if err := cfg.VerifyConnection(state(other)); !errors.Is(err, errCertPinMismatch) {
+		t.Fatalf("non-matching cert: got %v, want errCertPinMismatch", err)
 	}
-	if err := cfg.VerifyPeerCertificate(nil, nil); err == nil {
+	if err := cfg.VerifyConnection(state()); err == nil {
 		t.Fatal("missing cert should be rejected")
 	}
 }
 
 func TestServerTLSConfigSkip(t *testing.T) {
-	cfg := serverTLSConfig(&ServerAddr{Proto: "ssl", Addr: "host:993", SkipVerify: true}, "host")
+	addr := &ServerAddr{Proto: "ssl", Addr: "host:993", SkipVerify: true}
+	cfg := serverTLSConfig(addr, "host", shippedPolicy(addr))
 	if !cfg.InsecureSkipVerify {
 		t.Fatal("skip mode should set InsecureSkipVerify")
 	}
-	if cfg.VerifyPeerCertificate != nil {
-		t.Fatal("skip mode should not set VerifyPeerCertificate")
+	if cfg.VerifyConnection != nil || cfg.VerifyPeerCertificate != nil {
+		t.Fatal("skip mode should run no certificate check")
 	}
 }
 
 func TestServerTLSConfigCAVerify(t *testing.T) {
-	cfg := serverTLSConfig(&ServerAddr{Proto: "ssl", Addr: "host:700"}, "host")
+	addr := &ServerAddr{Proto: "ssl", Addr: "host:700"}
+	cfg := serverTLSConfig(addr, "host", shippedPolicy(addr))
 	if cfg.InsecureSkipVerify {
 		t.Fatal("default mode should verify against system roots")
 	}
