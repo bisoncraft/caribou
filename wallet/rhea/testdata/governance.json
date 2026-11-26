@@ -1,0 +1,142 @@
+{
+ "block_hash": "4jRBh7o3ND46sRyPzqLenVKarw2NcCYxnwf72aEfehHH",
+ "ref-labs.sputnik-dao.near": {
+  "roles": [
+   {
+    "name": "council",
+    "kind": {
+     "Group": [
+      "farbread8025.near",
+      "nicktrust.near",
+      "reffer.near",
+      "hajimi.near",
+      "wannamakeit.near"
+     ]
+    },
+    "permissions": [
+     "add_member_to_role:AddProposal",
+     "bounty_done:VoteApprove",
+     "add_bounty:VoteReject",
+     "add_bounty:AddProposal",
+     "config:VoteReject",
+     "add_bounty:VoteApprove",
+     "factory_info_update:VoteReject",
+     "policy:VoteRemove",
+     "remove_member_from_role:VoteReject",
+     "transfer:VoteRemove",
+     "vote:VoteApprove",
+     "upgrade_self:VoteApprove",
+     "call:VoteRemove",
+     "upgrade_self:AddProposal",
+     "upgrade_remote:AddProposal",
+     "upgrade_remote:VoteReject",
+     "upgrade_remote:VoteApprove",
+     "vote:AddProposal",
+     "add_member_to_role:VoteReject",
+     "factory_info_update:VoteRemove",
+     "bounty_done:VoteReject",
+     "call:AddProposal",
+     "factory_info_update:VoteApprove",
+     "add_bounty:VoteRemove",
+     "remove_member_from_role:VoteRemove",
+     "config:VoteRemove",
+     "upgrade_self:VoteRemove",
+     "call:VoteApprove",
+     "add_member_to_role:VoteRemove",
+     "policy:AddProposal",
+     "add_member_to_role:VoteApprove",
+     "policy:VoteApprove",
+     "transfer:VoteApprove",
+     "config:AddProposal",
+     "*:Finalize",
+     "remove_member_from_role:VoteApprove",
+     "set_vote_token:VoteReject",
+     "bounty_done:AddProposal",
+     "set_vote_token:AddProposal",
+     "policy:VoteReject",
+     "set_vote_token:VoteRemove",
+     "remove_member_from_role:AddProposal",
+     "transfer:VoteReject",
+     "transfer:AddProposal",
+     "call:VoteReject",
+     "upgrade_remote:VoteRemove",
+     "upgrade_self:VoteReject",
+     "vote:VoteReject",
+     "bounty_done:VoteRemove",
+     "vote:VoteRemove",
+     "factory_info_update:AddProposal",
+     "set_vote_token:VoteApprove",
+     "config:VoteApprove"
+    ],
+    "vote_policy": {}
+   },
+   {
+    "name": "all",
+    "kind": "Everyone",
+    "permissions": [],
+    "vote_policy": {}
+   }
+  ],
+  "default_vote_policy": {
+   "weight_kind": "RoleWeight",
+   "quorum": "0",
+   "threshold": [
+    1,
+    2
+   ]
+  },
+  "proposal_bond": "100000000000000000000000",
+  "proposal_period": "604800000000000",
+  "bounty_bond": "100000000000000000000000",
+  "bounty_forgiveness_period": "604800000000000"
+ },
+ "burrow.sputnik-dao.near": {
+  "roles": [
+   {
+    "name": "council",
+    "kind": {
+     "Group": [
+      "farbread8025.near",
+      "nicktrust.near",
+      "brrrb.near",
+      "brhost.near",
+      "wannamakeit.near"
+     ]
+    },
+    "permissions": [
+     "*:VoteReject",
+     "*:VoteRemove",
+     "*:VoteApprove",
+     "*:AddProposal",
+     "*:Finalize"
+    ],
+    "vote_policy": {}
+   }
+  ],
+  "default_vote_policy": {
+   "weight_kind": "RoleWeight",
+   "quorum": "0",
+   "threshold": [
+    1,
+    2
+   ]
+  },
+  "proposal_bond": "1000000000000000000000000",
+  "proposal_period": "604800000000000",
+  "bounty_bond": "1000000000000000000000000",
+  "bounty_forgiveness_period": "86400000000000"
+ },
+ "burrow_guardians": [
+  "nicktrust.near",
+  "doublerose.near"
+ ],
+ "am_super_admins": [
+  "ref-labs.sputnik-dao.near"
+ ],
+ "am_delay_status": {
+  "staging_duration": null,
+  "staging_timestamp": 1769053492372986631,
+  "new_staging_duration": null,
+  "new_staging_duration_timestamp": null
+ }
+}

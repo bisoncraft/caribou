@@ -22,15 +22,12 @@ import (
 
 	"github.com/bisoncraft/caribou/util"
 	"github.com/bisoncraft/caribou/util/config"
-	"github.com/bisoncraft/caribou/util/encode"
-	"github.com/bisoncraft/caribou/util/keygen"
 	"github.com/bisoncraft/caribou/wallet/asset"
 	"github.com/bisoncraft/caribou/wallet/asset/erc20"
 	multibal "github.com/bisoncraft/caribou/wallet/asset/eth/contracts/multibalance"
+	"github.com/bisoncraft/caribou/wallet/asset/eth/evmkey"
 	"github.com/bisoncraft/caribou/wallet/txdb"
-	"github.com/bisoncraft/go-bip39"
 	"github.com/decred/dcrd/dcrec/secp256k1/v4/ecdsa"
-	"github.com/decred/dcrd/hdkeychain/v3"
 	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/accounts/abi/bind"
 	"github.com/ethereum/go-ethereum/accounts/keystore"
@@ -239,14 +236,6 @@ var (
 	// allowance below this will signal that WE didn't set it, and we'll require
 	// an upgrade to unlimited (since we don't support limited allowance yet).
 	unlimitedAllowanceReplenishThreshold = new(big.Int).Div(unlimitedAllowance, big.NewInt(2))
-
-	seedDerivationPath = []uint32{
-		hdkeychain.HardenedKeyStart + 44, // purpose 44' for HD wallets
-		hdkeychain.HardenedKeyStart + 60, // eth coin type 60'
-		hdkeychain.HardenedKeyStart,      // account 0'
-		0,                                // branch 0
-		0,                                // index 0
-	}
 )
 
 // safeConfs returns the confirmations for a given tip and block number,
@@ -612,38 +601,10 @@ func (w *assetWallet) Info() *asset.WalletInfo {
 	return &wi
 }
 
-// genWalletSeed uses the wallet seed passed from core as the entropy for
-// generating a BIP-39 mnemonic. Then it returns the wallet seed generated
-// from the mnemonic which can be used to derive a private key.
-func genWalletSeed(entropy []byte) ([]byte, error) {
-	if len(entropy) < 32 || len(entropy) > 64 {
-		return nil, fmt.Errorf("wallet entropy must be 32 to 64 bytes long")
-	}
-	mnemonic, err := bip39.NewMnemonic(entropy)
-	if err != nil {
-		return nil, fmt.Errorf("error deriving mnemonic: %w", err)
-	}
-	return bip39.NewSeed(mnemonic, ""), nil
-}
-
+// privKeyFromSeed derives the EVM wallet key: account 0 of
+// evmkey.PrivKeyFromSeedAccount.
 func privKeyFromSeed(seed []byte) (pk []byte, zero func(), err error) {
-	walletSeed, err := genWalletSeed(seed)
-	if err != nil {
-		return nil, nil, err
-	}
-	defer encode.ClearBytes(walletSeed)
-
-	extKey, err := keygen.GenDeepChild(walletSeed, seedDerivationPath)
-	if err != nil {
-		return nil, nil, err
-	}
-	// defer extKey.Zero()
-	pk, err = extKey.SerializedPrivKey()
-	if err != nil {
-		extKey.Zero()
-		return nil, nil, err
-	}
-	return pk, extKey.Zero, nil
+	return evmkey.PrivKeyFromSeedAccount(seed, 0)
 }
 
 // CreateEVMWallet creates a wallet using the package's standard BIP-39-based

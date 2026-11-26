@@ -1,0 +1,407 @@
+{
+ "block": {
+  "height": 225016693,
+  "hash": "4jRBh7o3ND46sRyPzqLenVKarw2NcCYxnwf72aEfehHH",
+  "timestamp": 1794949549020383055,
+  "timestamp_nanosec": "1794949549020383055"
+ },
+ "views": [
+  {
+   "contract": "multica.near",
+   "method": "get_version",
+   "args": {},
+   "result": "\"0.3.4\""
+  },
+  {
+   "contract": "multica.near",
+   "method": "get_latest_mca_wasm_code_hash",
+   "args": {},
+   "result": "\"FDX6nYTmwVVwkjSXwFZ8xRjkPsyU1BEt1QqB9TbXwD11\""
+  },
+  {
+   "contract": "multica.near",
+   "method": "get_mca_init_balance",
+   "args": {},
+   "result": "\"100000000000000000000000\""
+  },
+  {
+   "contract": "multica.near",
+   "method": "get_max_wallets_per_mca",
+   "args": {},
+   "result": "10"
+  },
+  {
+   "contract": "multica.near",
+   "method": "get_last_mca_account_id",
+   "args": {},
+   "result": "\"1625\""
+  },
+  {
+   "contract": "multica.near",
+   "method": "up_get_delay_status",
+   "args": {},
+   "result": "{\"staging_duration\":null,\"staging_timestamp\":1769053492372986631,\"new_staging_duration\":null,\"new_staging_duration_timestamp\":null}"
+  },
+  {
+   "contract": "multica.near",
+   "method": "up_staged_code_hash",
+   "args": {},
+   "result": "\"F5FMpGcf5WHs1bWjYg4s4rSFSZUMbbchNx6m5vWUqEXj\""
+  },
+  {
+   "contract": "multica.near",
+   "method": "pa_all_paused",
+   "args": {},
+   "result": "null"
+  },
+  {
+   "contract": "multica.near",
+   "method": "acl_get_super_admins",
+   "args": {
+    "skip": 0,
+    "limit": 20
+   },
+   "result": "[\"ref-labs.sputnik-dao.near\"]"
+  },
+  {
+   "contract": "multica.near",
+   "method": "get_reliable_business_template_paged",
+   "args": {
+    "from_index": 0,
+    "limit": 100
+   },
+   "result": "{\"BurrowRegisterAndSupply\":\"[{\\\"receiver_id\\\":\\\"contract.main.burrow.near\\\",\\\"function_calls\\\":[{\\\"method_name\\\":\\\"storage_deposit\\\",\\\"args\\\":\\\"{\\\\\\\"registration_only\\\\\\\":true}\\\",\\\"gas\\\":\\\"10000000000000\\\",\\\"deposit\\\":\\\"100000000000000000000000\\\"}]},{\\\"receiver_id\\\":\\\"$TOKEN_ID_FLAG$\\\",\\\"function_calls\\\":[{\\\"method_name\\\":\\\"ft_transfer_call\\\",\\\"args\\\":\\\"{\\\\\\\"amount\\\\\\\":\\\\\\\"$AMOUNT_FLAG$\\\\\\\",\\\\\\\"msg\\\\\\\":\\\\\\\"\\\\\\\",\\\\\\\"receiver_id\\\\\\\":\\\\\\\"contract.main.burrow.near\\\\\\\"}\\\",\\\"gas\\\":\\\"50000000000000\\\",\\\"deposit\\\":\\\"1\\\"}]}]\",\"BurrowCollateral\":\"[{\\\"receiver_id\\\":\\\"$TOKEN_ID_FLAG$\\\",\\\"function_calls\\\":[{\\\"method_name\\\":\\\"ft_transfer_call\\\",\\\"args\\\":\\\"{\\\\\\\"amount\\\\\\\":\\\\\\\"$AMOUNT_FLAG$\\\\\\\",\\\\\\\"msg\\\\\\\":\\\\\\\"\\\\\\\\\\\\\\\"OnlyIncreaseCollateral\\\\\\\\\\\\\\\"\\\\\\\",\\\\\\\"receiver_id\\\\\\\":\\\\\\\"contract.main.burrow.near\\\\\\\"}\\\",\\\"gas\\\":\\\"50000000000000\\\",\\\"deposit\\\":\\\"1\\\"}]}]\",\"BurrowRepay\":\"[{\\\"receiver_id\\\":\\\"$TOKEN_ID_FLAG$\\\",\\\"function_calls\\\":[{\\\"method_name\\\":\\\"ft_transfer_call\\\",\\\"args\\\":\\\"{\\\\\\\"amount\\\\\\\":\\\\\\\"$AMOUNT_FLAG$\\\\\\\",\\\\\\\"msg\\\\\\\":\\\\\\\"\\\\\\\\\\\\\\\"OnlyRepay\\\\\\\\\\\\\\\"\\\\\\\",\\\\\\\"receiver_id\\\\\\\":\\\\\\\"contract.main.burrow.near\\\\\\\"}\\\",\\\"gas\\\":\\\"50000000000000\\\",\\\"deposit\\\":\\\"1\\\"}]}]\",\"BurrowSupply\":\"[{\\\"receiver_id\\\":\\\"$TOKEN_ID_FLAG$\\\",\\\"function_calls\\\":[{\\\"method_name\\\":\\\"ft_transfer_call\\\",\\\"args\\\":\\\"{\\\\\\\"amount\\\\\\\":\\\\\\\"$AMOUNT_FLAG$\\\\\\\",\\\\\\\"msg\\\\\\\":\\\\\\\"\\\\\\\",\\\\\\\"receiver_id\\\\\\\":\\\\\\\"contract.main.burrow.near\\\\\\\"}\\\",\\\"gas\\\":\\\"50000000000000\\\",\\\"deposit\\\":\\\"1\\\"}]}]\",\"BurrowRegisterAndCollateral\":\"[{\\\"receiver_id\\\":\\\"contract.main.burrow.near\\\",\\\"function_calls\\\":[{\\\"method_name\\\":\\\"storage_deposit\\\",\\\"args\\\":\\\"{\\\\\\\"registration_only\\\\\\\":true}\\\",\\\"gas\\\":\\\"10000000000000\\\",\\\"deposit\\\":\\\"100000000000000000000000\\\"}]},{\\\"receiver_id\\\":\\\"$TOKEN_ID_FLAG$\\\",\\\"function_calls\\\":[{\\\"method_name\\\":\\\"ft_transfer_call\\\",\\\"args\\\":\\\"{\\\\\\\"amount\\\\\\\":\\\\\\\"$AMOUNT_FLAG$\\\\\\\",\\\\\\\"msg\\\\\\\":\\\\\\\"\\\\\\\\\\\\\\\"OnlyIncreaseCollateral\\\\\\\\\\\\\\\"\\\\\\\",\\\\\\\"receiver_id\\\\\\\":\\\\\\\"contract.main.burrow.near\\\\\\\"}\\\",\\\"gas\\\":\\\"50000000000000\\\",\\\"deposit\\\":\\\"1\\\"}]}]\"}"
+  },
+  {
+   "contract": "multica.near",
+   "method": "get_create_mca_fee",
+   "args": {
+    "token_id": "17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1"
+   },
+   "result": "\"300000\""
+  },
+  {
+   "contract": "multica.near",
+   "method": "get_near_value",
+   "args": {
+    "token_id": "17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1"
+   },
+   "result": "\"3000000\""
+  },
+  {
+   "contract": "multica.near",
+   "method": "get_create_mca_fee",
+   "args": {
+    "token_id": "usdt.tether-token.near"
+   },
+   "result": "\"300000\""
+  },
+  {
+   "contract": "multica.near",
+   "method": "get_near_value",
+   "args": {
+    "token_id": "usdt.tether-token.near"
+   },
+   "result": "\"3000000\""
+  },
+  {
+   "contract": "multica.near",
+   "method": "get_create_mca_fee",
+   "args": {
+    "token_id": "wrap.near"
+   },
+   "result": "\"100000000000000000000000\""
+  },
+  {
+   "contract": "multica.near",
+   "method": "get_near_value",
+   "args": {
+    "token_id": "wrap.near"
+   },
+   "result": "\"1000000000000000000000000\""
+  },
+  {
+   "contract": "multica.near",
+   "method": "get_create_mca_fee",
+   "args": {
+    "token_id": "zec.omft.near"
+   },
+   "result": "\"30000\""
+  },
+  {
+   "contract": "multica.near",
+   "method": "get_near_value",
+   "args": {
+    "token_id": "zec.omft.near"
+   },
+   "result": "\"300000\""
+  },
+  {
+   "contract": "multica.near",
+   "method": "get_mca_by_wallet",
+   "args": {
+    "wallet": {
+     "EVM": "242c9fc3162321d326892cfe044fc0d9ffc3e9b0"
+    }
+   },
+   "result": "\"rhea001569.multica.near\""
+  },
+  {
+   "contract": "multica.near",
+   "method": "get_mca_by_wallet",
+   "args": {
+    "wallet": {
+     "EVM": "242C9FC3162321D326892CFE044FC0D9FFC3E9B0"
+    }
+   },
+   "result": "null"
+  },
+  {
+   "contract": "multica.near",
+   "method": "get_mca_by_wallet",
+   "args": {
+    "wallet": {
+     "EVM": "7e5f4552091a69125d5dfcb7b8c2659029395bdf"
+    }
+   },
+   "result": "null"
+  },
+  {
+   "contract": "multica.near",
+   "method": "list_wallets_by_mca",
+   "args": {
+    "mca_id": "rhea001569.multica.near"
+   },
+   "result": "[{\"WebAuthn\":\"p256:3v6SUBfpL33TzuN4nHSkD5VEYC1uuhYLmjFDdmLLbXZsALFSmWYAnXwtzn3LMtBkjo28Bu4GPmz1PiZ8JVuqEDxs\"},{\"Solana\":\"3KgfCwhtV2JKhWB7XRrGg6sbXNYkn7R3icYduJWv4xr2\"},{\"EVM\":\"242c9fc3162321d326892cfe044fc0d9ffc3e9b0\"},{\"Near\":\"bonjupiglet.near\"}]"
+  },
+  {
+   "contract": "rhea001569.multica.near",
+   "method": "get_nonce",
+   "args": {},
+   "result": "\"90\""
+  },
+  {
+   "contract": "rhea001569.multica.near",
+   "method": "get_version",
+   "args": {},
+   "result": "\"0.1.6\""
+  },
+  {
+   "contract": "rhea000001.multica.near",
+   "method": "get_version",
+   "args": {},
+   "result": "\"0.1.5\""
+  },
+  {
+   "contract": "rhea000001.multica.near",
+   "method": "get_nonce",
+   "args": {},
+   "result": "\"70\""
+  },
+  {
+   "contract": "contract.main.burrow.near",
+   "method": "get_version",
+   "args": {},
+   "result": "\"0.16.2\""
+  },
+  {
+   "contract": "contract.main.burrow.near",
+   "method": "get_config",
+   "args": {},
+   "result": "{\"oracle_account_id\":\"priceoracle.near\",\"pyth_oracle_account_id\":\"aggregate-oracle.near\",\"ref_exchange_id\":\"v2.ref-finance.near\",\"owner_id\":\"burrow.sputnik-dao.near\",\"booster_token_id\":\"token.burrow.near\",\"booster_decimals\":18,\"max_num_assets\":20,\"maximum_recency_duration_sec\":90,\"maximum_staleness_duration_sec\":90,\"lp_tokens_info_valid_duration_sec\":600,\"pyth_price_valid_duration_sec\":60,\"minimum_staking_duration_sec\":2592000,\"maximum_staking_duration_sec\":7776000,\"x_booster_multiplier_at_maximum_staking_duration\":30000,\"force_closing_enabled\":true,\"enable_price_oracle\":false,\"enable_pyth_oracle\":true,\"contract_mode\":\"Running\",\"boost_suppress_factor\":1000,\"dcl_id\":\"dclv2.ref-labs.near\",\"pause_operator_id\":null}"
+  },
+  {
+   "contract": "contract.main.burrow.near",
+   "method": "get_asset",
+   "args": {
+    "token_id": "17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1"
+   },
+   "result": "{\"token_id\":\"17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1\",\"supplied\":{\"shares\":\"10447850128793158397788226\",\"balance\":\"12119320531471864368726346\"},\"borrowed\":{\"shares\":\"8433780397719187494578478\",\"balance\":\"10647947794480010453769794\"},\"margin_debt\":{\"shares\":\"0\",\"balance\":\"0\"},\"margin_pending_debt\":\"0\",\"margin_position\":\"0\",\"reserved\":\"200002373581382714624455\",\"prot_fee\":\"672994604193599068728\",\"beneficiary_fees\":{\"pf.rhealab.near\":\"22496454609088633095349\"},\"uahpi\":\"42948783399248463\",\"last_update_timestamp\":\"1794949549020118778\",\"config\":{\"reserve_ratio\":2500,\"beneficiaries\":{\"pf.rhealab.near\":10000},\"target_utilization\":8000,\"target_utilization_rate\":\"1000000000001847694955734069\",\"max_utilization_rate\":\"1000000000012857214234867166\",\"holding_position_fee_rate\":\"1000000000000000000000000000\",\"volatility_ratio\":9500,\"extra_decimals\":12,\"can_deposit\":true,\"can_withdraw\":true,\"can_use_as_collateral\":true,\"can_borrow\":true,\"net_tvl_multiplier\":10000,\"max_change_rate\":null,\"supplied_limit\":\"60000000000000000000000000\",\"borrowed_limit\":\"25000000000000000000000000\",\"min_borrowed_amount\":\"1000000000\"},\"lostfound_shares\":\"0\",\"supply_apr\":\"0.121996940248432573660096688\",\"borrow_apr\":\"0.185139903797055665491674931\",\"farms\":[{\"farm_id\":{\"TokenNetBalance\":\"17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1\"},\"rewards\":{}}]}"
+  },
+  {
+   "contract": "contract.main.burrow.near",
+   "method": "get_asset",
+   "args": {
+    "token_id": "usdt.tether-token.near"
+   },
+   "result": "{\"token_id\":\"usdt.tether-token.near\",\"supplied\":{\"shares\":\"9449219673080076481278450\",\"balance\":\"10929874807994582325127990\"},\"borrowed\":{\"shares\":\"7734253129190136975567538\",\"balance\":\"9739359939606994528051426\"},\"margin_debt\":{\"shares\":\"0\",\"balance\":\"0\"},\"margin_pending_debt\":\"0\",\"margin_position\":\"0\",\"reserved\":\"200005479476872080192204\",\"prot_fee\":\"316542974456034767656\",\"beneficiary_fees\":{\"pf.rhealab.near\":\"20555506675276697299586\"},\"uahpi\":\"42949632793418147\",\"last_update_timestamp\":\"1794949549019467699\",\"config\":{\"reserve_ratio\":2500,\"beneficiaries\":{\"pf.rhealab.near\":10000},\"target_utilization\":8000,\"target_utilization_rate\":\"1000000000001847694955734069\",\"max_utilization_rate\":\"1000000000012857214234867166\",\"holding_position_fee_rate\":\"1000000000000000000000000000\",\"volatility_ratio\":9500,\"extra_decimals\":12,\"can_deposit\":true,\"can_withdraw\":true,\"can_use_as_collateral\":true,\"can_borrow\":true,\"net_tvl_multiplier\":10000,\"max_change_rate\":null,\"supplied_limit\":\"60000000000000000000000000\",\"borrowed_limit\":\"22000000000000000000000000\",\"min_borrowed_amount\":\"1000000000\"},\"lostfound_shares\":\"0\",\"supply_apr\":\"0.138660659893235880047093665\",\"borrow_apr\":\"0.207480253709312955505147661\",\"farms\":[{\"farm_id\":{\"TokenNetBalance\":\"usdt.tether-token.near\"},\"rewards\":{}}]}"
+  },
+  {
+   "contract": "contract.main.burrow.near",
+   "method": "get_asset",
+   "args": {
+    "token_id": "wrap.near"
+   },
+   "result": "{\"token_id\":\"wrap.near\",\"supplied\":{\"shares\":\"3060354050734184587136636121851\",\"balance\":\"3234775704386147523923686306025\"},\"borrowed\":{\"shares\":\"393443317515895126167537766122\",\"balance\":\"478344594875876223709990896828\"},\"margin_debt\":{\"shares\":\"0\",\"balance\":\"0\"},\"margin_pending_debt\":\"0\",\"margin_position\":\"0\",\"reserved\":\"14260243214094884979053903331\",\"prot_fee\":\"15056090293766951744727053\",\"beneficiary_fees\":{\"pf.rhealab.near\":\"188106829531005706828404133\"},\"uahpi\":\"42949661445713275\",\"last_update_timestamp\":\"1794949549020177847\",\"config\":{\"reserve_ratio\":2500,\"beneficiaries\":{\"pf.rhealab.near\":10000},\"target_utilization\":8000,\"target_utilization_rate\":\"1000000000003593629036885046\",\"max_utilization_rate\":\"1000000000039724853136740579\",\"holding_position_fee_rate\":\"1000000000000000000000000000\",\"volatility_ratio\":7500,\"extra_decimals\":0,\"can_deposit\":true,\"can_withdraw\":true,\"can_use_as_collateral\":true,\"can_borrow\":true,\"net_tvl_multiplier\":0,\"max_change_rate\":null,\"supplied_limit\":\"3600000000000000000000000000000\",\"borrowed_limit\":\"1000000000000000000000000000000\",\"min_borrowed_amount\":\"1000000000000000\"},\"lostfound_shares\":\"0\",\"supply_apr\":\"0.002337377691553442971504035\",\"borrow_apr\":\"0.021075162549077414288128667\",\"farms\":[{\"farm_id\":{\"Supplied\":\"wrap.near\"},\"rewards\":{}},{\"farm_id\":{\"Borrowed\":\"wrap.near\"},\"rewards\":{}}]}"
+  },
+  {
+   "contract": "contract.main.burrow.near",
+   "method": "get_asset",
+   "args": {
+    "token_id": "zec.omft.near"
+   },
+   "result": "{\"token_id\":\"zec.omft.near\",\"supplied\":{\"shares\":\"4998241767632419599624\",\"balance\":\"5002942210304980766473\"},\"borrowed\":{\"shares\":\"308161542702357750888\",\"balance\":\"312324972126352339494\"},\"margin_debt\":{\"shares\":\"0\",\"balance\":\"0\"},\"margin_pending_debt\":\"0\",\"margin_position\":\"0\",\"reserved\":\"1727362393347741419\",\"prot_fee\":\"559746267504333794\",\"beneficiary_fees\":{\"pf.rhealab.near\":\"448521768861047017\"},\"uahpi\":\"32765995181502620\",\"last_update_timestamp\":\"1794949549019561293\",\"config\":{\"reserve_ratio\":2500,\"beneficiaries\":{\"pf.rhealab.near\":5000},\"target_utilization\":8000,\"target_utilization_rate\":\"1000000000003593629036885046\",\"max_utilization_rate\":\"1000000000039724853136740579\",\"holding_position_fee_rate\":\"1000000000000000000000000000\",\"volatility_ratio\":7000,\"extra_decimals\":10,\"can_deposit\":true,\"can_withdraw\":true,\"can_use_as_collateral\":true,\"can_borrow\":true,\"net_tvl_multiplier\":0,\"max_change_rate\":null,\"supplied_limit\":\"20000000000000000000000\",\"borrowed_limit\":\"1500000000000000000000\",\"min_borrowed_amount\":\"1000000000\"},\"lostfound_shares\":\"0\",\"supply_apr\":\"0.000415715281545539220769792\",\"borrow_apr\":\"0.00887878423704399787758988\",\"farms\":[{\"farm_id\":{\"TokenNetBalance\":\"zec.omft.near\"},\"rewards\":{}}]}"
+  },
+  {
+   "contract": "contract.main.burrow.near",
+   "method": "get_account_all_positions",
+   "args": {
+    "account_id": "rhea001569.multica.near"
+   },
+   "result": "{\"account_id\":\"rhea001569.multica.near\",\"supplied\":[{\"token_id\":\"17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1\",\"balance\":\"1387814608947877\",\"shares\":\"1196410228047344\",\"apr\":\"0.121996940248432573660096688\"}],\"positions\":{\"REGULAR\":{\"collateral\":[{\"token_id\":\"wrap.near\",\"balance\":\"200920577216290306447789830\",\"shares\":\"190086781450094326650245735\",\"apr\":\"0.002337377691553442971504035\"},{\"token_id\":\"2260fac5e5542a773aa44fbcfedf7c193bc2c599.factory.bridge.near\",\"balance\":\"46986406936278871\",\"shares\":\"46038261045167773\",\"apr\":\"0.010056610215700110694860438\"},{\"token_id\":\"eth.bridge.near\",\"balance\":\"1000124173468506281\",\"shares\":\"988194670895368762\",\"apr\":\"0.009842475178804076906716009\"},{\"token_id\":\"xtoken.rhealab.near\",\"balance\":\"25148534725656048997121\",\"shares\":\"25145734464564610776709\",\"apr\":\"0.000000228649969656037468761\"},{\"token_id\":\"zec.omft.near\",\"balance\":\"15004001503410294476\",\"shares\":\"14989904708772024530\",\"apr\":\"0.000415715281545539220769792\"}],\"borrowed\":[{\"token_id\":\"17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1\",\"balance\":\"13004972106821978168687\",\"shares\":\"10300677740386709653143\",\"apr\":\"0.185139903797055665491674931\"}]}},\"farms\":[{\"farm_id\":{\"Supplied\":\"2260fac5e5542a773aa44fbcfedf7c193bc2c599.factory.bridge.near\"},\"rewards\":[]},{\"farm_id\":{\"TokenNetBalance\":\"zec.omft.near\"},\"rewards\":[]},{\"farm_id\":{\"Supplied\":\"wrap.near\"},\"rewards\":[]},{\"farm_id\":{\"TokenNetBalance\":\"xtoken.rhealab.near\"},\"rewards\":[]}],\"has_non_farmed_assets\":false,\"booster_staking\":null,\"booster_stakings\":{},\"is_locked\":false}"
+  },
+  {
+   "contract": "contract.main.burrow.near",
+   "method": "get_account_all_positions",
+   "args": {
+    "account_id": "rhea001594.multica.near"
+   },
+   "result": "{\"account_id\":\"rhea001594.multica.near\",\"supplied\":[{\"token_id\":\"usdt.tether-token.near\",\"balance\":\"29998854986533613\",\"shares\":\"25934951286110859\",\"apr\":\"0.138660659893235880047093665\"}],\"positions\":{},\"farms\":[{\"farm_id\":\"NetTvl\",\"rewards\":[]},{\"farm_id\":{\"TokenNetBalance\":\"usdt.tether-token.near\"},\"rewards\":[]}],\"has_non_farmed_assets\":false,\"booster_staking\":null,\"booster_stakings\":{},\"is_locked\":false}"
+  },
+  {
+   "contract": "contract.main.burrow.near",
+   "method": "get_account_all_positions",
+   "args": {
+    "account_id": "rhea001625.multica.near"
+   },
+   "result": "{\"account_id\":\"rhea001625.multica.near\",\"supplied\":[{\"token_id\":\"zec.omft.near\",\"balance\":\"720001056447629\",\"shares\":\"719324589771072\",\"apr\":\"0.000415715281545539220769792\"}],\"positions\":{},\"farms\":[{\"farm_id\":{\"TokenNetBalance\":\"zec.omft.near\"},\"rewards\":[]}],\"has_non_farmed_assets\":false,\"booster_staking\":null,\"booster_stakings\":{},\"is_locked\":false}"
+  },
+  {
+   "contract": "17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1",
+   "method": "ft_metadata",
+   "args": {},
+   "result": "{\"spec\":\"ft-1.0.0\",\"name\":\"USDC\",\"symbol\":\"USDC\",\"icon\":\"data:image/svg+xml,%3C%3Fxml version=%221.0%22 encoding=%22utf-8%22%3F%3E%3C!-- Generator: Adobe Illustrator 22.0.1, SVG Export Plug-In . SVG Version: 6.00 Build 0) --%3E%3Csvg version=%221.1%22 id=%22Layer_1%22 xmlns=%22http://www.w3.org/2000/svg%22 xmlns:xlink=%22http://www.w3.org/1999/xlink%22 x=%220px%22 y=%220px%22 viewBox=%220 0 256 256%22 style=%22enable-background:new 0 0 256 256;%22 xml:space=%22preserve%22%3E%3Cstyle type=%22text/css%22%3E .st0%7Bfill:%232775CA;%7D .st1%7Bfill:%23FFFFFF;%7D%0A%3C/style%3E%3Ccircle class=%22st0%22 cx=%22128%22 cy=%22128%22 r=%22128%22/%3E%3Cpath class=%22st1%22 d=%22M104,217c0,3-2.4,4.7-5.2,3.8C60,208.4,32,172.2,32,129.3c0-42.8,28-79.1,66.8-91.5c2.9-0.9,5.2,0.8,5.2,3.8 v7.5c0,2-1.5,4.3-3.4,5C69.9,65.4,48,94.9,48,129.3c0,34.5,21.9,63.9,52.6,75.1c1.9,0.7,3.4,3,3.4,5V217z%22/%3E%3Cpath class=%22st1%22 d=%22M136,189.3c0,2.2-1.8,4-4,4h-8c-2.2,0-4-1.8-4-4v-12.6c-17.5-2.4-26-12.1-28.3-25.5c-0.4-2.3,1.4-4.3,3.7-4.3 h9.1c1.9,0,3.5,1.4,3.9,3.2c1.7,7.9,6.3,14,20.3,14c10.3,0,17.7-5.8,17.7-14.4c0-8.6-4.3-11.9-19.5-14.4c-22.4-3-33-9.8-33-27.3 c0-13.5,10.3-24.1,26.1-26.3V69.3c0-2.2,1.8-4,4-4h8c2.2,0,4,1.8,4,4v12.7c12.9,2.3,21.1,9.6,23.8,21.8c0.5,2.3-1.3,4.4-3.7,4.4 h-8.4c-1.8,0-3.3-1.2-3.8-2.9c-2.3-7.7-7.8-11.1-17.4-11.1c-10.6,0-16.1,5.1-16.1,12.3c0,7.6,3.1,11.4,19.4,13.7 c22,3,33.4,9.3,33.4,28c0,14.2-10.6,25.7-27.1,28.3V189.3z%22/%3E%3Cpath class=%22st1%22 d=%22M157.2,220.8c-2.9,0.9-5.2-0.8-5.2-3.8v-7.5c0-2.2,1.3-4.3,3.4-5c30.6-11.2,52.6-40.7,52.6-75.1 c0-34.5-21.9-63.9-52.6-75.1c-1.9-0.7-3.4-3-3.4-5v-7.5c0-3,2.4-4.7,5.2-3.8C196,50.2,224,86.5,224,129.3 C224,172.2,196,208.4,157.2,220.8z%22/%3E%3C/svg%3E%0A\",\"reference\":null,\"reference_hash\":null,\"decimals\":6}"
+  },
+  {
+   "contract": "17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1",
+   "method": "ft_balance_of",
+   "args": {
+    "account_id": "rhea001569.multica.near"
+   },
+   "result": "\"52\""
+  },
+  {
+   "contract": "17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1",
+   "method": "storage_balance_of",
+   "args": {
+    "account_id": "rhea001569.multica.near"
+   },
+   "result": "{\"total\":\"1250000000000000000000\",\"available\":\"0\"}"
+  },
+  {
+   "contract": "usdt.tether-token.near",
+   "method": "ft_metadata",
+   "args": {},
+   "result": "{\"spec\":\"ft-1.0.0\",\"name\":\"Tether USD\",\"symbol\":\"USDt\",\"icon\":\"data:image/svg+xml,%3Csvg width='111' height='90' viewBox='0 0 111 90' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath fill-rule='evenodd' clip-rule='evenodd' d='M24.4825 0.862305H88.0496C89.5663 0.862305 90.9675 1.64827 91.7239 2.92338L110.244 34.1419C111.204 35.7609 110.919 37.8043 109.549 39.1171L58.5729 87.9703C56.9216 89.5528 54.2652 89.5528 52.6139 87.9703L1.70699 39.1831C0.305262 37.8398 0.0427812 35.7367 1.07354 34.1077L20.8696 2.82322C21.6406 1.60483 23.0087 0.862305 24.4825 0.862305ZM79.8419 14.8003V23.5597H61.7343V29.6329C74.4518 30.2819 83.9934 32.9475 84.0642 36.1425L84.0638 42.803C83.993 45.998 74.4518 48.6635 61.7343 49.3125V64.2168H49.7105V49.3125C36.9929 48.6635 27.4513 45.998 27.3805 42.803L27.381 36.1425C27.4517 32.9475 36.9929 30.2819 49.7105 29.6329V23.5597H31.6028V14.8003H79.8419ZM55.7224 44.7367C69.2943 44.7367 80.6382 42.4827 83.4143 39.4727C81.0601 36.9202 72.5448 34.9114 61.7343 34.3597V40.7183C59.7966 40.8172 57.7852 40.8693 55.7224 40.8693C53.6595 40.8693 51.6481 40.8172 49.7105 40.7183V34.3597C38.8999 34.9114 30.3846 36.9202 28.0304 39.4727C30.8066 42.4827 42.1504 44.7367 55.7224 44.7367Z' fill='%23009393'/%3E%3C/svg%3E\",\"reference\":null,\"reference_hash\":null,\"decimals\":6}"
+  },
+  {
+   "contract": "usdt.tether-token.near",
+   "method": "ft_balance_of",
+   "args": {
+    "account_id": "rhea001569.multica.near"
+   },
+   "result": "\"0\""
+  },
+  {
+   "contract": "usdt.tether-token.near",
+   "method": "storage_balance_of",
+   "args": {
+    "account_id": "rhea001569.multica.near"
+   },
+   "result": "null"
+  },
+  {
+   "contract": "wrap.near",
+   "method": "ft_metadata",
+   "args": {},
+   "result": "{\"spec\":\"ft-1.0.0\",\"name\":\"Wrapped NEAR fungible token\",\"symbol\":\"wNEAR\",\"icon\":null,\"reference\":null,\"reference_hash\":null,\"decimals\":24}"
+  },
+  {
+   "contract": "wrap.near",
+   "method": "ft_balance_of",
+   "args": {
+    "account_id": "rhea001569.multica.near"
+   },
+   "result": "\"9\""
+  },
+  {
+   "contract": "wrap.near",
+   "method": "storage_balance_of",
+   "args": {
+    "account_id": "rhea001569.multica.near"
+   },
+   "result": "{\"total\":\"1250000000000000000000\",\"available\":\"0\"}"
+  },
+  {
+   "contract": "zec.omft.near",
+   "method": "ft_metadata",
+   "args": {},
+   "result": "{\"spec\":\"ft-1.0.0\",\"name\":\"Zcash\",\"symbol\":\"ZEC\",\"icon\":\"data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHhtbG5zOnhsaW5rPSJodHRwOi8vd3d3LnczLm9yZy8xOTk5L3hsaW5rIiB2aWV3Qm94PSIwIDAgMjUwMCAyNTAwIj48ZGVmcz48c3R5bGU+LmNscy0xe2ZpbGw6dXJsKCNsaW5lYXItZ3JhZGllbnQpO308L3N0eWxlPjxsaW5lYXJHcmFkaWVudCBpZD0ibGluZWFyLWdyYWRpZW50IiB4MT0iNzgyLjg0IiB5MT0iMTY1LjkxIiB4Mj0iNzk5LjM0IiB5Mj0iMTY1LjkxIiBncmFkaWVudFRyYW5zZm9ybT0idHJhbnNsYXRlKC04MTU2OC4yIDU1MzcyLjA1KSByb3RhdGUoLTQ1KSBzY2FsZSgxMjIuNDEpIiBncmFkaWVudFVuaXRzPSJ1c2VyU3BhY2VPblVzZSI+PHN0b3Agb2Zmc2V0PSIwIiBzdG9wLWNvbG9yPSIjY2Y4NzI0Ii8+PHN0b3Agb2Zmc2V0PSIxIiBzdG9wLWNvbG9yPSIjZmRjZTU4Ii8+PC9saW5lYXJHcmFkaWVudD48L2RlZnM+PHRpdGxlPno8L3RpdGxlPjxnIGlkPSJMYXllcl8yIiBkYXRhLW5hbWU9IkxheWVyIDIiPjxnIGlkPSJMYXllcl8xLTIiIGRhdGEtbmFtZT0iTGF5ZXIgMSI+PHBhdGggY2xhc3M9ImNscy0xIiBkPSJNMTI2My4wNSwyMjk3LjYxYy01NjkuNiwwLTEwMzQuNTctNDY1LjQzLTEwMzQuNTctMTAzNC41NiwwLTU2OS42LDQ2NS40NC0xMDM0LjU3LDEwMzQuNTctMTAzNC41Nyw1NjkuNiwwLDEwMzQuNTYsNDY1LjQ0LDEwMzQuNTYsMTAzNC41N0MyMjk3LjYxLDE4MzIuNjUsMTgzMi42NSwyMjk3LjYxLDEyNjMuMDUsMjI5Ny42MVoiLz48cGF0aCBkPSJNMTI1MCwyNTAwQzU2Mi41LDI1MDAsMCwxOTM3LjUsMCwxMjUwUzU2Mi41LDAsMTI1MCwwLDI1MDAsNTYyLjUsMjUwMCwxMjUwLDE5MzcuNSwyNTAwLDEyNTAsMjUwMFptMC0yMjIyLjA2Yy01MzQuNTYsMC05NzIuMDYsNDM3LjUtOTcyLjA2LDk3Mi4wNnM0MzcuNSw5NzIuMDYsOTcyLjA2LDk3Mi4wNiw5NzIuMDYtNDM3LjUsOTcyLjA2LTk3Mi4wNlMxNzg0LjU2LDI3Ny45NCwxMjUwLDI3Ny45NFoiLz48cGF0aCBkPSJNMTIyMS4wNSwxNTg4LjU5aDU0MS42N3YyNzAuODRoLTMxOS42djIyOS4xNkgxMTY1LjE4VjE4NjYuNTNIODMxLjg1YzAtOTAuNDQtMTMuNzMtMTgwLjQsNy4xLTI2My43Myw3LjEtNDEuNjcsNTUuNC04My4zNCw5MC40My0xMjUsMTA0LjE3LTEyNSwyMDguMzQtMjUwLDMxOS42MS0zNzUsNDEuNjYtNDguNzcsODMuMzMtOTAuNDQsMTMyLjEtMTQ1LjgzSDg2MC4yNlY2ODYuMTNoMzA1LjM5VjQ1N2gyNzAuODRWNjc5aDMzMy4zM2MwLDkwLjQzLDEzLjczLDE4MC40LTcuMSwyNjMuNzMtNy4xLDQxLjY3LTU1LjQsODMuMzMtOTAuNDQsMTI1LTEwNC4xNiwxMjUtMjA4LjMzLDI1MC0zMTkuNiwzNzVDMTMxMSwxNDkxLjUzLDEyNjkuMzUsMTUzOS44MiwxMjIxLjA1LDE1ODguNTlaIi8+PC9nPjwvZz48L3N2Zz4=\",\"reference\":null,\"reference_hash\":null,\"decimals\":8}"
+  },
+  {
+   "contract": "zec.omft.near",
+   "method": "ft_balance_of",
+   "args": {
+    "account_id": "rhea001569.multica.near"
+   },
+   "result": "\"12\""
+  },
+  {
+   "contract": "zec.omft.near",
+   "method": "storage_balance_of",
+   "args": {
+    "account_id": "rhea001569.multica.near"
+   },
+   "result": "{\"total\":\"1250000000000000000000\",\"available\":\"0\"}"
+  },
+  {
+   "contract": "usdt.tether-token.near",
+   "method": "storage_balance_of",
+   "args": {
+    "account_id": "0000000000000000000000000000000000000000000000000000000000000001"
+   },
+   "result": "null"
+  }
+ ],
+ "accounts": [
+  {
+   "account_id": "rhea001569.multica.near",
+   "view": {
+    "amount": "157608019447165699999630",
+    "block_hash": "4jRBh7o3ND46sRyPzqLenVKarw2NcCYxnwf72aEfehHH",
+    "block_height": 225016693,
+    "code_hash": "11111111111111111111111111111111",
+    "global_contract_hash": "FDX6nYTmwVVwkjSXwFZ8xRjkPsyU1BEt1QqB9TbXwD11",
+    "locked": "0",
+    "storage_paid_at": 0,
+    "storage_usage": 494
+   }
+  },
+  {
+   "account_id": "rhea000001.multica.near",
+   "view": {
+    "amount": "117828978494606599999801",
+    "block_hash": "4jRBh7o3ND46sRyPzqLenVKarw2NcCYxnwf72aEfehHH",
+    "block_height": 225016693,
+    "code_hash": "11111111111111111111111111111111",
+    "global_contract_hash": "GaLHJv6RqCfniprg6dc7K484Ga3i1qjEYPkSRk5aL31n",
+    "locked": "0",
+    "storage_paid_at": 0,
+    "storage_usage": 467
+   }
+  },
+  {
+   "account_id": "rhea001594.multica.near",
+   "view": {
+    "amount": "100000000000000000000000",
+    "block_hash": "4jRBh7o3ND46sRyPzqLenVKarw2NcCYxnwf72aEfehHH",
+    "block_height": 225016693,
+    "code_hash": "11111111111111111111111111111111",
+    "global_contract_hash": "FDX6nYTmwVVwkjSXwFZ8xRjkPsyU1BEt1QqB9TbXwD11",
+    "locked": "0",
+    "storage_paid_at": 0,
+    "storage_usage": 326
+   }
+  }
+ ]
+}

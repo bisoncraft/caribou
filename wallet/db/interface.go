@@ -114,4 +114,24 @@ type DB interface {
 	// ActiveIntentsSwaps returns the swap records in a non-terminal
 	// state, oldest first.
 	ActiveIntentsSwaps() ([]*IntentsSwap, error)
+	// StoreRheaOp stores a RHEA lending operation under its ID, stamping
+	// UpdatedAt and replacing any existing record. CreatedAt orders the
+	// listing and must not change across re-stores.
+	StoreRheaOp(op *RheaOp) error
+	// RheaOp fetches an operation by ID. It is ErrRheaOpNotFound if no
+	// record exists.
+	RheaOp(id string) (*RheaOp, error)
+	// RheaOps returns every operation, newest first.
+	RheaOps() ([]*RheaOp, error)
+	// ActiveRheaOps returns the operations that need polling
+	// (RheaOp.Active): every non-terminal operation and every terminal one
+	// whose leg state was locally inferred. Oldest first.
+	ActiveRheaOps() ([]*RheaOp, error)
+	// StoreRheaAccount stores an MCA account record, replacing any record
+	// for the same account manager, derivation version, and identity.
+	StoreRheaAccount(a *RheaAccount) error
+	// RheaAccount fetches the account record for an account manager,
+	// derivation version, and identity. It is ErrRheaAccountNotFound if
+	// none is stored.
+	RheaAccount(am string, version uint32, identity string) (*RheaAccount, error)
 }

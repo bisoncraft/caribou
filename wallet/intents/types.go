@@ -72,6 +72,13 @@ type AppFee struct {
 // base units as a decimal string. Deadline (RFC3339) is the refund
 // activation time and must accommodate origin-chain confirmation; the
 // service may impose its own minimum window.
+//
+// CustomRecipientMsg, for a NEAR recipient, makes the payout an
+// ft_transfer_call carrying this msg instead of a plain transfer; it is
+// part of the signed payload and the echo cross-check. NoAppFee is a
+// client-side directive, never sent: it suppresses the client's configured
+// application fees for this request (the service may still apply its own
+// keyless surcharge). It cannot be combined with AppFees.
 type QuoteRequest struct {
 	Dry                bool     `json:"dry"`
 	SwapType           string   `json:"swapType"`
@@ -89,6 +96,8 @@ type QuoteRequest struct {
 	QuoteWaitingTimeMs int      `json:"quoteWaitingTimeMs,omitempty"`
 	Referral           string   `json:"referral,omitempty"`
 	AppFees            []AppFee `json:"appFees,omitempty"`
+	CustomRecipientMsg string   `json:"customRecipientMsg,omitempty"`
+	NoAppFee           bool     `json:"-"`
 }
 
 // Quote is the priced offer within a quote response. All amounts are

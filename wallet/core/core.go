@@ -77,13 +77,16 @@ type Config struct {
 	// startup.
 	NoAutoWalletLock bool // zero value is legacy behavior
 	// IntentsBaseURL overrides the NEAR Intents 1Click API base URL, for
-	// dev servers such as the simnet mock (util/testing/near-intents).
+	// dev servers such as the simnet mock (util/testing/one-click).
 	// Ignored on mainnet: an injected base URL would bypass the pinned
 	// quote-signing key and redirect deposits.
 	IntentsBaseURL string
 	// IntentsSigningKey overrides the pinned 1Click quote-signing public
 	// key (base58, optional "ed25519:" prefix). Ignored on mainnet.
 	IntentsSigningKey string
+	// RheaTest enables RHEA lending on a non-mainnet network against the
+	// given deployment and endpoints. Ignored on mainnet.
+	RheaTest *RheaTestConfig
 }
 
 // locale is data associated with the currently selected language.
@@ -182,6 +185,12 @@ type Core struct {
 	// intentsEng holds the *intentsEngine for cross-chain swaps. All
 	// engine logic lives in near-intents.go.
 	intentsEng atomic.Value
+
+	// rheaEng holds the *rheaEngine for RHEA lending (rhea.go). rheaIDs
+	// holds the public lending identities derived at login, nil while
+	// logged out.
+	rheaEng atomic.Value
+	rheaIDs atomic.Pointer[[]rheaIdentity]
 }
 
 // New is the constructor for a new Core.
@@ -482,6 +491,8 @@ func (c *Core) Run(ctx context.Context) {
 
 	// Cross-chain swap engine (near-intents.go).
 	c.startIntentsEngine(ctx)
+	// RHEA lending engine (rhea.go).
+	c.startRheaEngine(ctx)
 
 	c.wg.Wait() // block here until all goroutines except DB complete
 
@@ -2708,6 +2719,7 @@ func (c *Core) Login(pw []byte) error {
 			if err != nil {
 				return false, fmt.Errorf("error deriving multisig private key: %w", err)
 			}
+			c.setRheaIdentities(seed)
 
 			c.loggedIn = true
 			return true, nil
@@ -2734,6 +2746,9 @@ func (c *Core) Login(pw []byte) error {
 		return err
 	}
 	if needsInit {
+		if eng, err := c.rheaEngine(); err == nil {
+			eng.poke()
+		}
 		c.notify(newLoginNote("Connecting wallets..."))
 		c.connectWallets(crypter) // initialize reserves
 	}
@@ -2952,6 +2967,7 @@ func (c *Core) Logout() error {
 
 	c.multisigXPriv.Zero()
 	c.multisigXPriv = nil
+	c.clearRheaIdentities()
 
 	c.loggedIn = false
 

@@ -91,6 +91,26 @@ const (
 	IntentsStateDepositFailed = db.IntentsStateDepositFailed
 )
 
+// swapLeg returns a swap record's 1Click leg.
+func swapLeg(swap *IntentsSwap) *intentsLeg {
+	return &intentsLeg{
+		State:        swap.State,
+		Inferred:     swap.Inferred,
+		InferredFrom: swap.InferredFrom,
+		Deadline:     swap.Deadline,
+		DepositTxID:  swap.DepositTxID,
+		RefundReason: swap.RefundReason,
+	}
+}
+
+// setSwapLeg copies a leg's mutable state back to its swap record.
+func setSwapLeg(swap *IntentsSwap, l *intentsLeg) {
+	swap.State = l.State
+	swap.Inferred = l.Inferred
+	swap.InferredFrom = l.InferredFrom
+	swap.RefundReason = l.RefundReason
+}
+
 // intentsDeadlines is the quote deadline (refund-activation time)
 // requested per origin chain. The window must cover deposit confirmation
 // on the origin chain; the service may extend it further.
@@ -375,7 +395,7 @@ func (e *intentsEngine) refreshSwap(ctx context.Context, swap *IntentsSwap) erro
 	// A locally inferred terminal record polls only until its horizon;
 	// past it, the inference is accepted as final and the record retires
 	// from the active set.
-	if swap.Inferred && time.Now().After(swap.Deadline.Add(intentsInferredHorizon)) {
+	if swapLeg(swap).retireDue(time.Now()) {
 		e.retireInferred(swap.DepositAddress)
 		return nil
 	}
@@ -635,19 +655,13 @@ func (e *intentsEngine) mergeStatus(depositAddress string, status *intents.Statu
 		e.log.Errorf("Error reloading swap %s: %v", depositAddress, err)
 		return nil, nil
 	}
-	if swap.Terminal() {
-		// A service-confirmed terminal state is never regressed. A locally
-		// inferred one (a deadline timeout) yields to the service's view —
-		// the service can accept and settle or refund a deposit past the
-		// local grace — except a restatement of the status the inference
-		// was made against (PENDING_DEPOSIT, or the INCOMPLETE_DEPOSIT the
-		// timeout stopped waiting on), which reports nothing the inference
-		// did not already account for. Adopting it would hand the record
-		// back to applyTimeout, which would infer FAILED again next cycle,
-		// and the two would alternate every poll until the horizon.
-		if !swap.Inferred || status.Status == intents.StatusPendingDeposit || status.Status == swap.InferredFrom {
-			return nil, nil
-		}
+	// The late-settlement rule (intentsLeg.canAdopt): a service-confirmed
+	// terminal state is never regressed, and a locally inferred one yields
+	// to any service status except a restatement of what the inference
+	// already accounted for.
+	leg := swapLeg(swap)
+	if !leg.canAdopt(status.Status) {
+		return nil, nil
 	}
 
 	newState := status.Status
@@ -669,10 +683,9 @@ func (e *intentsEngine) mergeStatus(depositAddress string, status *intents.Statu
 	confirming := !changed
 
 	prevState := swap.State
-	swap.State = newState
 	// Any other service-reported status supersedes the local inference.
-	swap.Inferred = false
-	swap.InferredFrom = ""
+	leg.adopt(newState)
+	setSwapLeg(swap, leg)
 	if realized {
 		swap.AmountOut = details.AmountOut
 		swap.AtomsOut = realizedAtoms
@@ -748,11 +761,14 @@ func (e *intentsEngine) retireInferred(depositAddress string) {
 	e.swapMtx.Lock()
 	defer e.swapMtx.Unlock()
 	swap, err := e.db.IntentsSwap(depositAddress)
-	if err != nil || !swap.Inferred || !swap.Terminal() {
+	if err != nil {
 		return
 	}
-	swap.Inferred = false
-	swap.InferredFrom = ""
+	leg := swapLeg(swap)
+	if !leg.retire() {
+		return
+	}
+	setSwapLeg(swap, leg)
 	if err := e.db.StoreIntentsSwap(swap); err != nil {
 		e.log.Errorf("Error retiring inferred swap %s: %v", depositAddress, err)
 		return
@@ -769,26 +785,22 @@ func (e *intentsEngine) retireInferred(depositAddress string) {
 // under the lock before the transition. Returns true when the swap was
 // transitioned, making the deadline timeout check moot.
 func (e *intentsEngine) applyDepositRejection(ctx context.Context, swap *IntentsSwap) bool {
-	if swap.State != IntentsStateDepositSent || swap.DepositTxID == "" {
-		return false
-	}
-	w, found := e.c.wallet(swap.OriginAssetID)
-	if !found {
-		return false
-	}
-	wt, err := w.WalletTransaction(ctx, swap.DepositTxID)
-	if err != nil || wt == nil || !wt.Rejected {
+	if !e.c.depositRejected(ctx, swapLeg(swap), swap.OriginAssetID) {
 		return false
 	}
 
 	e.swapMtx.Lock()
 	fresh, err := e.db.IntentsSwap(swap.DepositAddress)
-	if err != nil || fresh.State != IntentsStateDepositSent {
+	if err != nil {
 		e.swapMtx.Unlock()
 		return false
 	}
-	fresh.State = IntentsStateDepositFailed
-	fresh.RefundReason = "the deposit transaction was rejected by the origin chain; the deposited funds never left the wallet"
+	leg := swapLeg(fresh)
+	if !leg.applyRejection() {
+		e.swapMtx.Unlock()
+		return false
+	}
+	setSwapLeg(fresh, leg)
 	var note Notification
 	if err := e.db.StoreIntentsSwap(fresh); err == nil {
 		e.log.Warnf("Swap %s marked DEPOSIT_FAILED: deposit tx %s was rejected on-chain",
@@ -840,14 +852,16 @@ func (e *intentsEngine) applyTimeout(depositAddress string) {
 	}
 	// A zero deadline (a record that predates deadline persistence, or a
 	// reconstruction fallback that failed) can never prove a timeout.
-	if swap.Deadline.IsZero() || time.Now().Before(swap.Deadline.Add(intentsExpiryGrace)) {
+	leg := swapLeg(swap)
+	outcome := leg.applyTimeout(time.Now())
+	if outcome == legTimeoutNone {
 		e.swapMtx.Unlock()
 		return
 	}
+	setSwapLeg(swap, leg)
 	var note Notification
-	switch swap.State {
-	case IntentsStateQuoted:
-		swap.State = IntentsStateExpired
+	switch outcome {
+	case legTimeoutExpired:
 		if err := e.db.StoreIntentsSwap(swap); err == nil {
 			e.log.Infof("Swap %s expired: quote deadline %s passed with no deposit sent",
 				depositAddress, swap.Deadline.Format(time.RFC3339))
@@ -856,11 +870,7 @@ func (e *intentsEngine) applyTimeout(depositAddress string) {
 		} else {
 			e.log.Errorf("Error storing expired swap %s: %v", depositAddress, err)
 		}
-	case IntentsStateDepositSent:
-		swap.State = intents.StatusFailed
-		swap.Inferred = true
-		swap.InferredFrom = intents.StatusPendingDeposit
-		swap.RefundReason = "the service did not observe a deposit before the quote deadline"
+	case legTimeoutUnobserved:
 		if err := e.db.StoreIntentsSwap(swap); err == nil {
 			e.log.Warnf("Swap %s marked FAILED: deposit %s not observed by the service before deadline %s",
 				depositAddress, swap.DepositTxID, swap.Deadline.Format(time.RFC3339))
@@ -869,11 +879,7 @@ func (e *intentsEngine) applyTimeout(depositAddress string) {
 		} else {
 			e.log.Errorf("Error storing timed-out swap %s: %v", depositAddress, err)
 		}
-	case intents.StatusIncompleteDeposit:
-		swap.State = intents.StatusFailed
-		swap.Inferred = true
-		swap.InferredFrom = intents.StatusIncompleteDeposit
-		swap.RefundReason = "the service reported the deposit incomplete and did not refund it before the quote deadline"
+	case legTimeoutIncomplete:
 		if err := e.db.StoreIntentsSwap(swap); err == nil {
 			e.log.Warnf("Swap %s marked FAILED: incomplete deposit not refunded by the service before deadline %s",
 				depositAddress, swap.Deadline.Format(time.RFC3339))
@@ -1519,38 +1525,15 @@ func (c *Core) IntentsExecute(pw []byte, originAssetID, destAssetID uint32, atom
 		deadline = time.Now().Add(intentsDeadline(originAssetID))
 	}
 
-	// Resolve the deposit fee rate before persisting anything, so a
-	// fee-rate failure leaves no orphaned QUOTED record. Only UTXO wallets
-	// price a transaction to a specific rate; account-based wallets compute
-	// their own fees, so the rate is zeroed. A zero live estimate for a
-	// UTXO wallet means the send must not proceed with a made-up rate, and
-	// the rate is bounded like a plain send (ceiling, live-rate band, and
-	// mainnet USD cap) so a poisoned fee source cannot broadcast a runaway
-	// fee the user never sees.
-	var feeRate uint64
-	if originWallet.Info().BlockchainClass == asset.BlockchainClassUTXO {
-		if feeRate = originWallet.usableFeeRate(); feeRate == 0 {
-			return nil, fmt.Errorf("no live fee-rate estimate for %s deposit", unbip(originAssetID))
-		}
-		if err := c.validateSendFeeRate(originWallet, quote.DepositAddress, sendAtoms, feeRate, false); err != nil {
-			return nil, fmt.Errorf("deposit fee rate rejected: %w", err)
-		}
+	// Resolve the deposit fee rate (and, for account-based wallets, check
+	// the balance) before persisting anything, so a knowable failure leaves
+	// no orphaned QUOTED record.
+	feeRate, err := c.legDepositFeeRate(originWallet, quote.DepositAddress, sendAtoms)
+	if err != nil {
+		return nil, err
+	}
+	if feeRate > 0 {
 		eng.log.Debugf("Using fee rate %d for the %s deposit", feeRate, unbip(originAssetID))
-	} else {
-		// Account-based wallets don't price a rate to check here, but the
-		// deposit is a plain Send of atoms, so Available (which already
-		// accounts for whatever that wallet reserves for its own fee) is
-		// the same gate Send itself will apply. Checking it now, before the
-		// quote is persisted, avoids committing a doomed quote and leaving
-		// a QUOTED record to sit until the deadline timeout for a failure
-		// that was already knowable.
-		bal, err := originWallet.Wallet.Balance()
-		if err != nil {
-			return nil, fmt.Errorf("error checking %s balance: %w", unbip(originAssetID), err)
-		}
-		if bal.Available < sendAtoms {
-			return nil, asset.ErrInsufficientBalance
-		}
 	}
 
 	swap := &IntentsSwap{
@@ -1574,83 +1557,73 @@ func (c *Core) IntentsExecute(pw []byte, originAssetID, destAssetID uint32, atom
 		QuoteEnvelope:  envelope,
 		CreatedAt:      time.Now(),
 	}
-	if err := eng.db.StoreIntentsSwap(swap); err != nil {
-		return nil, fmt.Errorf("error persisting swap record: %w", err)
-	}
-	eng.log.Infof("Committed swap quote %s: %s → %s (guaranteed min %s), deadline %s",
-		quote.DepositAddress,
-		originWallet.Info().UnitInfo.FormatAtoms(sendAtoms),
-		destWallet.Info().UnitInfo.FormatAtoms(atomsOut),
-		destWallet.Info().UnitInfo.FormatAtoms(minCommittedOut),
-		deadline.Format(time.RFC3339))
-
-	coin, err := originWallet.Wallet.Send(quote.DepositAddress, sendAtoms, feeRate)
+	_, err = eng.fundLeg(ctx, &legFunding{
+		wallet:         originWallet,
+		depositAddress: quote.DepositAddress,
+		atoms:          sendAtoms,
+		feeRate:        feeRate,
+		persist: func() error {
+			if err := eng.db.StoreIntentsSwap(swap); err != nil {
+				return fmt.Errorf("error persisting swap record: %w", err)
+			}
+			eng.log.Infof("Committed swap quote %s: %s → %s (guaranteed min %s), deadline %s",
+				quote.DepositAddress,
+				originWallet.Info().UnitInfo.FormatAtoms(sendAtoms),
+				destWallet.Info().UnitInfo.FormatAtoms(atomsOut),
+				destWallet.Info().UnitInfo.FormatAtoms(minCommittedOut),
+				deadline.Format(time.RFC3339))
+			return nil
+		},
+		recordSent: func(txID string, fee uint64, feeUSD float64) {
+			// Record the deposit under swapMtx, reloading so a concurrent
+			// poll that already advanced the state is not regressed to
+			// DEPOSIT_SENT.
+			eng.swapMtx.Lock()
+			defer eng.swapMtx.Unlock()
+			fresh, err := eng.db.IntentsSwap(swap.DepositAddress)
+			if err != nil {
+				// The reload failed, so a concurrent writer's state cannot
+				// be honored — but the deposit was broadcast and must be
+				// recorded. The local record still holds every field
+				// (including CreatedAt); persist it as DEPOSIT_SENT with the
+				// txid. Without this the record stays QUOTED with no txid,
+				// and a later timeout would report "no funds moved" for a
+				// deposit that did move.
+				eng.log.Errorf("Error reloading swap record %s after deposit: %v", swap.DepositAddress, err)
+				swap.State = IntentsStateDepositSent
+				swap.DepositTxID = txID
+				swap.DepositTxFee = fee
+				swap.USDDepositFee = feeUSD
+				if err := eng.db.StoreIntentsSwap(swap); err != nil {
+					eng.log.Errorf("Error storing swap record %s after deposit: %v", swap.DepositAddress, err)
+				}
+				return
+			}
+			if fresh.State == IntentsStateQuoted {
+				fresh.State = IntentsStateDepositSent
+			}
+			if fresh.DepositTxID == "" {
+				fresh.DepositTxID = txID
+			}
+			if fresh.DepositTxFee == 0 {
+				fresh.DepositTxFee = fee
+				fresh.USDDepositFee = feeUSD
+			}
+			if err := eng.db.StoreIntentsSwap(fresh); err != nil {
+				eng.log.Errorf("Error updating swap record %s after deposit: %v", swap.DepositAddress, err)
+			}
+			swap = fresh
+		},
+	})
 	if err != nil {
-		// The wallet recorded no send, so the record stays QUOTED and
-		// expires unfunded; poke the poller so its deadline timeout runs
-		// even when the ticker was parked with no other active swap. The
-		// message claims only that — a Send contract that errored after
-		// broadcasting would still be observed by the service through the
-		// deposit address, and in any case pays the user's own recipient.
+		// A Send failure leaves the record QUOTED to expire unfunded; poke
+		// the poller so its deadline timeout runs even when the ticker was
+		// parked with no other active swap.
 		eng.poke()
-		return nil, fmt.Errorf("deposit send failed (no deposit was recorded, the quote will expire): %w", err)
+		return nil, err
 	}
-
-	// The wallet's history has the send's network fee — exact for UTXO
-	// wallets, an estimate for wallets that price fees at send time (EVM),
-	// which the poller re-captures until the transaction settles. A lookup
-	// miss leaves the fee zero for the poller to fill. The fee is priced in
-	// USD immediately, while the catalog rate is closest to the fee event.
-	var depositFee uint64
-	var depositFeeUSD float64
-	if tx, err := originWallet.WalletTransaction(ctx, coin.TxID()); err == nil && tx != nil && tx.Fees > 0 {
-		depositFee = tx.Fees
-		depositFeeUSD = eng.usdValue(ctx, intentsChainID(originAssetID), depositFee)
-	}
-
-	// Record the deposit under swapMtx, reloading so a concurrent poll that
-	// already advanced the state is not regressed to DEPOSIT_SENT.
-	eng.swapMtx.Lock()
-	fresh, err := eng.db.IntentsSwap(swap.DepositAddress)
-	if err == nil {
-		if fresh.State == IntentsStateQuoted {
-			fresh.State = IntentsStateDepositSent
-		}
-		if fresh.DepositTxID == "" {
-			fresh.DepositTxID = coin.TxID()
-		}
-		if fresh.DepositTxFee == 0 {
-			fresh.DepositTxFee = depositFee
-			fresh.USDDepositFee = depositFeeUSD
-		}
-		if err := eng.db.StoreIntentsSwap(fresh); err != nil {
-			eng.log.Errorf("Error updating swap record %s after deposit: %v", swap.DepositAddress, err)
-		}
-		swap = fresh
-	} else {
-		// The reload failed, so a concurrent writer's state cannot be
-		// honored — but the deposit was broadcast and must be recorded.
-		// The local record still holds every field (including CreatedAt);
-		// persist it as DEPOSIT_SENT with the txid. Without this the record
-		// stays QUOTED with no txid, and a later timeout would report "no
-		// funds moved" for a deposit that did move.
-		eng.log.Errorf("Error reloading swap record %s after deposit: %v", swap.DepositAddress, err)
-		swap.State = IntentsStateDepositSent
-		swap.DepositTxID = coin.TxID()
-		swap.DepositTxFee = depositFee
-		swap.USDDepositFee = depositFeeUSD
-		if err := eng.db.StoreIntentsSwap(swap); err != nil {
-			eng.log.Errorf("Error storing swap record %s after deposit: %v", swap.DepositAddress, err)
-		}
-	}
-	eng.swapMtx.Unlock()
 	eng.log.Infof("Swap %s deposit broadcast: %s tx %s (fee %d atoms)",
 		swap.DepositAddress, unbip(originAssetID), swap.DepositTxID, swap.DepositTxFee)
-	if err := eng.client.SubmitDeposit(ctx, swap.DepositAddress, swap.DepositTxID); err != nil {
-		eng.log.Warnf("Deposit hint submission failed (service will detect on-chain): %v", err)
-	} else {
-		eng.log.Debugf("Deposit txid hint submitted for swap %s", swap.DepositAddress)
-	}
 
 	c.notify(newIntentsSwapNote(swap, "Swap deposit sent",
 		fmt.Sprintf("Swapping %s for %s. Deposit %s broadcast.",

@@ -282,3 +282,141 @@ func TestSubmitDeposit(t *testing.T) {
 		t.Fatalf("wrong submit body: %v", got)
 	}
 }
+
+// TestQuoteAppFeeMatrix covers every combination of a client-configured
+// fee and a request's fee intent, on dry and committed quotes: an unset
+// request takes the client's fees, a request's own fees replace them,
+// NoAppFee sends none, and the directive itself never reaches the wire.
+func TestQuoteAppFeeMatrix(t *testing.T) {
+	pub, priv, _ := ed25519.GenerateKey(nil)
+	clientFees := []AppFee{{Recipient: "0xcaribou", Fee: DefaultAppFeeBps}}
+	customFees := []AppFee{{Recipient: "0xother", Fee: 5}}
+
+	var sent map[string]json.RawMessage
+	srv := newQuoteServer(t, priv, func(echo map[string]json.RawMessage) {
+		sent = make(map[string]json.RawMessage, len(echo))
+		for k, v := range echo {
+			sent[k] = v
+		}
+	})
+
+	tests := []struct {
+		name       string
+		clientFees []AppFee
+		reqFees    []AppFee
+		noAppFee   bool
+		want       []AppFee // nil: no appFees member sent
+	}{
+		{"client fee, request unset", clientFees, nil, false, clientFees},
+		{"client fee, request custom", clientFees, customFees, false, customFees},
+		{"client fee, request none", clientFees, nil, true, nil},
+		{"no client fee, request unset", nil, nil, false, nil},
+		{"no client fee, request custom", nil, customFees, false, customFees},
+		{"no client fee, request none", nil, nil, true, nil},
+	}
+	for _, tt := range tests {
+		for _, dry := range []bool{true, false} {
+			c := newTestClient(t, srv.URL, pub, tt.clientFees)
+			req := testQuoteRequest()
+			req.Dry = dry
+			req.AppFees = tt.reqFees
+			req.NoAppFee = tt.noAppFee
+			sent = nil
+			if _, err := c.Quote(context.Background(), req); err != nil {
+				t.Fatalf("%s (dry %t): Quote: %v", tt.name, dry, err)
+			}
+			for k := range sent {
+				if strings.EqualFold(k, "noAppFee") {
+					t.Fatalf("%s (dry %t): directive %q sent", tt.name, dry, k)
+				}
+			}
+			raw, ok := sent["appFees"]
+			if tt.want == nil {
+				if ok {
+					t.Fatalf("%s (dry %t): appFees sent: %s", tt.name, dry, raw)
+				}
+				continue
+			}
+			var got []AppFee
+			if err := json.Unmarshal(raw, &got); err != nil {
+				t.Fatalf("%s (dry %t): bad appFees %s: %v", tt.name, dry, raw, err)
+			}
+			if len(got) != len(tt.want) || got[0] != tt.want[0] {
+				t.Fatalf("%s (dry %t): appFees = %+v, want %+v", tt.name, dry, got, tt.want)
+			}
+			if tt.reqFees == nil && req.AppFees != nil {
+				t.Fatalf("%s (dry %t): caller's request mutated", tt.name, dry)
+			}
+		}
+	}
+
+	// A request that both supplies fees and disables them is contradictory
+	// and is refused before anything is sent.
+	c := newTestClient(t, srv.URL, pub, clientFees)
+	req := testQuoteRequest()
+	req.AppFees = customFees
+	req.NoAppFee = true
+	sent = nil
+	if _, err := c.Quote(context.Background(), req); err == nil {
+		t.Fatalf("contradictory fee request accepted")
+	}
+	if sent != nil {
+		t.Fatalf("contradictory fee request reached the service")
+	}
+}
+
+// TestQuoteCustomRecipientMsg checks that a recipient message is sent
+// verbatim, covered by the echo cross-check whether altered or dropped,
+// and covered by the signature.
+func TestQuoteCustomRecipientMsg(t *testing.T) {
+	pub, priv, _ := ed25519.GenerateKey(nil)
+	const msg = `{"w":[{"EVM":"242c9fc3162321d326892cfe044fc0d9ffc3e9b0"}],"b":{"r":"BurrowSupply"}}`
+
+	var sentMsg json.RawMessage
+	srv := newQuoteServer(t, priv, func(echo map[string]json.RawMessage) {
+		sentMsg = echo["customRecipientMsg"]
+	})
+	c := newTestClient(t, srv.URL, pub, nil)
+	req := testQuoteRequest()
+	req.CustomRecipientMsg = msg
+	resp, err := c.Quote(context.Background(), req)
+	if err != nil {
+		t.Fatalf("Quote: %v", err)
+	}
+	var got string
+	if err := json.Unmarshal(sentMsg, &got); err != nil || got != msg {
+		t.Fatalf("message not sent verbatim: %s", sentMsg)
+	}
+	if resp.Request.CustomRecipientMsg != msg {
+		t.Fatalf("echoed message not decoded: %q", resp.Request.CustomRecipientMsg)
+	}
+
+	// The signature covers the message: altering the echoed value after
+	// signing breaks verification.
+	tampered := strings.Replace(string(resp.rawRequest), "BurrowSupply", "BurrowCollateral", 1)
+	if tampered == string(resp.rawRequest) {
+		t.Fatalf("tampering had no effect")
+	}
+	resp.rawRequest = json.RawMessage(tampered)
+	if err := VerifyQuoteSignature(resp, pub); err == nil {
+		t.Fatalf("altered recipient message passed signature verification")
+	}
+
+	// A service that signs a different or missing message is caught by
+	// the echo cross-check.
+	for name, mangled := range map[string]json.RawMessage{
+		"altered": json.RawMessage(`"{\"w\":[],\"b\":{\"r\":\"BurrowCollateral\"}}"`),
+		"dropped": json.RawMessage(`null`),
+		"empty":   json.RawMessage(`""`),
+	} {
+		srv := newQuoteServer(t, priv, func(echo map[string]json.RawMessage) {
+			echo["customRecipientMsg"] = mangled
+		})
+		c := newTestClient(t, srv.URL, pub, nil)
+		req := testQuoteRequest()
+		req.CustomRecipientMsg = msg
+		if _, err := c.Quote(context.Background(), req); err == nil || !strings.Contains(err.Error(), "differs from submitted request") {
+			t.Fatalf("%s: expected echo mismatch rejection, got %v", name, err)
+		}
+	}
+}

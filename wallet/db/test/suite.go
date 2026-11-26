@@ -42,6 +42,9 @@ func RunSuite(t *testing.T, newDB func(t *testing.T) db.DB) {
 	run("Multisig", testMultisig)
 	run("ConnectLifecycle", testConnectLifecycle)
 	run("IntentsSwaps", testIntentsSwaps)
+	run("RheaOps", testRheaOps)
+	run("RheaInferredOps", testRheaInferredOps)
+	run("RheaAccounts", testRheaAccounts)
 }
 
 func testConnectLifecycle(t *testing.T, d db.DB) {

@@ -95,6 +95,11 @@ type kvDB struct {
 	intentsSwaps     kvstore.StoreTable
 	intentsStampIdx  kvstore.StoreIndex
 	intentsActiveIdx kvstore.StoreIndex
+
+	rheaOps       kvstore.StoreTable
+	rheaStampIdx  kvstore.StoreIndex
+	rheaActiveIdx kvstore.StoreIndex
+	rheaAccounts  kvstore.StoreTable
 }
 
 var _ DB = (*kvDB)(nil)
@@ -146,6 +151,18 @@ func newDB(store kvstore.Store, log util.Logger) (*kvDB, error) {
 		return nil, err
 	}
 	if d.intentsActiveIdx, err = d.intentsSwaps.AddIndex(intentsActiveIndexName, intentsActiveIndexFunc); err != nil {
+		return nil, err
+	}
+	if d.rheaOps, err = store.Table(rheaOpsTable); err != nil {
+		return nil, err
+	}
+	if d.rheaStampIdx, err = d.rheaOps.AddIndex(rheaStampIndexName, rheaStampIndexFunc); err != nil {
+		return nil, err
+	}
+	if d.rheaActiveIdx, err = d.rheaOps.AddIndex(rheaActiveIndexName, rheaActiveIndexFunc); err != nil {
+		return nil, err
+	}
+	if d.rheaAccounts, err = store.Table(rheaAccountsTable); err != nil {
 		return nil, err
 	}
 	return d, nil
