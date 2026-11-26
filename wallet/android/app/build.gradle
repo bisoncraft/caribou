@@ -1,30 +1,42 @@
 plugins {
     id 'com.android.application'
-    id 'org.jetbrains.kotlin.android'
 }
 
+// The release scripts pass the version of the tag being built
+// (release/package-android.sh). The defaults serve builds from source.
+def caribouVersionCode = (findProperty('caribou.versionCode') ?: '1') as Integer
+def caribouVersionName = findProperty('caribou.versionName') ?: '0.1.0'
+
+// arm64-v8a is what phones run and the only ABI that ships. x86_64 is for the
+// emulator on an Intel or AMD host, whose ARM translation cannot run the Go
+// runtime; it needs a library bound for the same ABI
+// (CARIBOU_ANDROID_ABI=x86_64 ./bind.sh).
+def caribouAbi = findProperty('caribou.abi') ?: 'arm64-v8a'
+
 android {
-    namespace 'com.bisoncraft.caribou'
-    compileSdk 34
+    namespace = 'com.bisoncraft.caribou'
+    compileSdk = 37
     // build-tools 35+ zipaligns uncompressed native libs to 16 KB pages.
-    buildToolsVersion '35.0.0'
+    buildToolsVersion = '37.0.0'
 
     defaultConfig {
-        applicationId 'com.bisoncraft.caribou'
-        minSdk 21
-        targetSdk 34
-        versionCode 1
-        versionName '0.1.0'
-        testInstrumentationRunner 'androidx.test.runner.AndroidJUnitRunner'
-        // gomobile produces native .so per ABI inside the .aar; arm64 covers
-        // modern devices. Add others as the bind targets grow.
+        applicationId = 'com.bisoncraft.caribou'
+        // Android 7.0. The UI is drawn by the system WebView, which stops
+        // receiving updates on old Android versions: on 6.0 it is frozen at
+        // Chromium 106, short of the 108 the app frame's dvh sizing needs and
+        // the 111 that color-mix() needs. On 7.x it reaches 119.
+        minSdk = 24
+        targetSdk = 37
+        versionCode = caribouVersionCode
+        versionName = caribouVersionName
+        testInstrumentationRunner = 'androidx.test.runner.AndroidJUnitRunner'
         ndk {
-            abiFilters 'arm64-v8a'
+            abiFilters caribouAbi
         }
     }
 
     buildFeatures {
-        buildConfig true
+        buildConfig = true
     }
 
     // One flavor per network. Each gets a distinct applicationId suffix and
@@ -35,21 +47,21 @@ android {
     flavorDimensions 'network'
     productFlavors {
         netMainnet {
-            dimension 'network'
+            dimension = 'network'
             buildConfigField 'String', 'WALLET_NET', '"mainnet"'
             manifestPlaceholders = [appName: 'Caribou']
         }
         netTestnet {
-            dimension 'network'
-            applicationIdSuffix '.testnet'
-            versionNameSuffix '-testnet'
+            dimension = 'network'
+            applicationIdSuffix = '.testnet'
+            versionNameSuffix = '-testnet'
             buildConfigField 'String', 'WALLET_NET', '"testnet"'
             manifestPlaceholders = [appName: 'Caribou testnet']
         }
         netSimnet {
-            dimension 'network'
-            applicationIdSuffix '.simnet'
-            versionNameSuffix '-simnet'
+            dimension = 'network'
+            applicationIdSuffix = '.simnet'
+            versionNameSuffix = '-simnet'
             buildConfigField 'String', 'WALLET_NET', '"simnet"'
             manifestPlaceholders = [appName: 'Caribou simnet']
         }
@@ -57,10 +69,16 @@ android {
 
     buildTypes {
         release {
-            // Release builds are intentionally left unsigned and unshrunk while
-            // the app is pre-public. Add a signingConfig and enable minify
-            // before any distribution.
-            minifyEnabled false
+            // No signingConfig: Gradle emits an unsigned APK and bundle, and
+            // release/package-android.sh signs them, the bundle with the Play
+            // upload key and the APK with the app signing key. The keystore
+            // passwords therefore never pass through Gradle.
+            //
+            // R8 stays off. The shell's own code is two Kotlin files and the
+            // package size is dominated by the Go library, so shrinking saves
+            // little, while the gomobile classes are reached through JNI,
+            // where a wrong keep rule fails only at run time.
+            minifyEnabled = false
         }
     }
 
@@ -68,27 +86,32 @@ android {
     // the APK (required for Android 15+ 16 KB-page devices and Play API 35+).
     packaging {
         jniLibs {
-            useLegacyPackaging false
+            useLegacyPackaging = false
+            // Package the native libraries byte for byte. The Go library is
+            // already linked without symbols, and the XMR library is verified
+            // against wallet/asset/xmr/lib/SHA256SUMS, a check that stripping
+            // it here would undo for the copy that ships.
+            keepDebugSymbols += '**/*.so'
         }
     }
 
     compileOptions {
-        sourceCompatibility JavaVersion.VERSION_17
-        targetCompatibility JavaVersion.VERSION_17
-    }
-    kotlinOptions {
-        jvmTarget = '17'
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
     }
 }
 
 dependencies {
     // The gomobile-bound library (build it with ./bind.sh).
     implementation files('libs/mobile.aar')
-    implementation 'androidx.appcompat:appcompat:1.7.0'
+    implementation 'androidx.appcompat:appcompat:1.8.0'
+    // Edge-to-edge setup and window insets (MainActivity).
+    implementation 'androidx.activity:activity:1.13.0'
+    implementation 'androidx.core:core:1.19.1'
     // BiometricPrompt + CryptoObject for the keystore-backed biometric unlock.
     implementation 'androidx.biometric:biometric:1.1.0'
 
     // Instrumented tests (run on a device/emulator) for the keystore/cipher paths.
-    androidTestImplementation 'androidx.test.ext:junit:1.1.5'
-    androidTestImplementation 'androidx.test:runner:1.5.2'
+    androidTestImplementation 'androidx.test.ext:junit:1.3.0'
+    androidTestImplementation 'androidx.test:runner:1.7.0'
 }
