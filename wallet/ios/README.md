@@ -18,12 +18,8 @@ and wired via `CARIBOU_XMR=1 ./bind.sh` + `project.xmr.yml` (see
 
 - macOS with Xcode (the iOS toolchain is Mac-only).
 - [XcodeGen](https://github.com/yonki/XcodeGen): `brew install xcodegen`
-- gomobile/gobind on PATH, initialized:
-  ```sh
-  go install golang.org/x/mobile/cmd/gomobile@latest
-  go install golang.org/x/mobile/cmd/gobind@latest
-  gomobile init
-  ```
+- Go and Node. gomobile and gobind need no install: `bind.sh` builds them
+  from the versions pinned in `go.mod`.
 - For device builds, a signing team. Create the git-ignored
   `Caribou/Config/Local.xcconfig` with your Apple Developer team:
   ```
@@ -156,6 +152,12 @@ It realistically runs in a macOS CI job with Apple credentials.
 
 ## Release (TestFlight / App Store)
 
+A release is cut from a tag with `release/package-ios.sh vX.Y.Z [--upload]`
+(see `release/README.md`). It exports the tag, checks the toolchain versions
+and the XMR libraries, runs the three steps below with the tag's version and
+build number, and checks the signed `.ipa` before any upload. The steps by
+hand, on the working tree:
+
 ```sh
 CARIBOU_XMR=1 ./bind.sh
 xcodegen generate --spec project.xmr.yml
@@ -196,16 +198,20 @@ create an App Store Connect API key:
 
 | | Provisioning | Upload |
 |---|---|---|
-| API key (`ASC_KEY_ID` + `ASC_ISSUER_ID`) | ✅ | ✅ |
+| API key with the Admin role (`ASC_KEY_ID` + `ASC_ISSUER_ID`) | ✅ | ✅ |
+| API key with the Developer role, plus `ASC_KEY_NO_PROVISIONING=1` | through the Apple ID signed into Xcode | ✅ |
 | Apple ID signed into Xcode + app-specific password (`APPLE_ID` + `APPLE_PASSWORD`) | ✅ | ✅ |
+
+A Developer-role key cannot create the distribution certificate or the App
+Store provisioning profile. `ASC_KEY_NO_PROVISIONING=1` keeps it for the
+upload and leaves provisioning to the Apple ID signed into Xcode. The key the
+desktop release notarizes with (`release/README.md`) is such a key.
 
 An Admin who cannot mint an API key uses the second row: sign in once at Xcode →
 Settings → Accounts for provisioning, and generate an app-specific password at
-appleid.apple.com for the upload. Those are the same two variables the desktop
-build already exports for notarytool, and **the same password works** — an
-app-specific password belongs to the Apple ID, not to an app or a team — so a
-shell set up to package the desktop app needs nothing new. (`ASC_APPLE_ID` /
-`ASC_APP_PASSWORD` override them if the two must differ.)
+appleid.apple.com for the upload. An app-specific password belongs to the
+Apple ID, not to an app or a team, so one password serves every upload.
+(`ASC_APPLE_ID` / `ASC_APP_PASSWORD` override them if the two must differ.)
 
 Better still, keep the password out of the environment entirely by storing it in
 the login keychain once — `release.sh` looks there when no password variable is
