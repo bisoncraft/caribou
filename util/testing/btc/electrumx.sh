@@ -74,12 +74,12 @@ if [ ! -d "${ELECTRUMX_DIR}/venv" ]; then
 fi
 source ${ELECTRUMX_DIR}/venv/bin/activate
 python -m ensurepip --upgrade
-pip install .
+python -m pip install .
 
 # Dash's electrumx coin module hashes block headers with X11 and imports the
 # x11_hash package, which electrumx does not pull in by default.
 if [ "${COIN}" = "Dash" ]; then
-    pip install x11_hash
+    python -m pip install x11_hash
 fi
 
 gencerts -L ${DATA_DIR}/ssl.cert ${DATA_DIR}/ssl.key
