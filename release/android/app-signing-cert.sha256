@@ -1,0 +1,12 @@
+# SHA-256 fingerprint of the Caribou app signing certificate
+# (CN=Bisoncraft LLC, O=Bisoncraft LLC, C=US; RSA 4096; valid until 2056-11-17).
+#
+# This is the app's identity on a device: Android installs an update only when
+# it is signed by the certificate of the installed copy. The directly
+# distributed APK is signed with this key, and Google Play holds a copy and
+# signs what it serves with it, so both channels carry this fingerprint.
+# release/package-android.sh fails a build whose APK is signed by anything
+# else. Check an APK against it with:
+#
+#     apksigner verify --print-certs caribou-<version>-android-arm64.apk
+8C:D1:54:3F:3A:2F:35:9F:48:73:10:F8:0C:C9:BD:89:13:DC:23:03:FD:D0:50:3A:7F:7D:E2:E7:78:DD:02:7F

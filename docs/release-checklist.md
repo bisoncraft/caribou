@@ -8,8 +8,9 @@ and are cherry-picked to the branch. The release branch is never merged back
 into `master`, because it carries the built web bundle that `master`
 ignores.
 
-Desktop installers and command-line archives are built, signed and packaged
-from a Linux host by the scripts in `release/`; see [release/README.md](../release/README.md) for the
+Desktop installers, command-line archives and the Android app are built,
+signed and packaged from a Linux host by the scripts in `release/`, and the
+iOS app from a Mac; see [release/README.md](../release/README.md) for the
 tooling, credentials and per-platform notes.
 
 ## 1. Before forking the release branch
@@ -231,6 +232,20 @@ Repeat for every tag, release candidates included, on `release-vX.Y`.
       characters in asset names without documenting which. The names the
       scripts produce avoid the one known case, `~`: the `.deb` file name
       carries `1.2.0-rc1` while its control file keeps `1.2.0~rc1`.
+- [ ] Android is part of the same run: `release.sh` calls
+      `release/package-android.sh`, which adds the signed
+      `caribou-X.Y.Z-android-arm64.apk` to `dist/` and leaves the Android App
+      Bundle for Google Play in `release/out/X.Y.Z/android/`. Its version
+      code is the commit count of the tag. Where Google Play has already
+      seen that number or a higher one, pass `--android-build <N>` with the
+      next free one.
+- [ ] iOS, on a Mac with the pinned Xcode and XcodeGen
+      (`release/package-ios.sh` names them), signed into Xcode with an Apple
+      ID that holds the Admin or Account Holder role on the team. The two
+      iOS XMR libraries come from `wallet/asset/xmr/fetch-libs.sh`.
+      `release/package-ios.sh vX.Y.Z` builds, signs and checks
+      `release/out/X.Y.Z/ios/Caribou-X.Y.Z-<build>.ipa`. Nothing from it goes
+      into the GitHub release.
 
 ## 5. Verify
 
@@ -248,6 +263,16 @@ Repeat for every tag, release candidates included, on `release-vX.Y`.
       Mac, run the binary from a zip downloaded with a browser, so the
       quarantine attribute is set, which confirms Gatekeeper accepts the
       online notarization ticket.
+- [ ] Android: install the APK on an arm64 phone that has the previous
+      release (`adb install -r`), confirm it installs over it with the
+      wallet intact, then create a wallet on a clean install, send and
+      receive, and check biometric unlock. `apksigner verify --print-certs`
+      on the APK prints the fingerprint in
+      `release/android/app-signing-cert.sha256`.
+- [ ] iOS: `release/package-ios.sh vX.Y.Z --upload`, then confirm the build
+      reaches TestFlight (`xcrun altool --build-status`, as described in
+      `wallet/ios/README.md`), install it from TestFlight and run the same
+      wallet checks.
 - [ ] Verify `SHA256SUMS.asc` with the release signing key.
 
 ## 6. Publish
@@ -256,6 +281,14 @@ Repeat for every tag, release candidates included, on `release-vX.Y`.
 - [ ] Run the "Build and Publish Snap Package" workflow for the tag with
       `publish` enabled.
 - [ ] Deploy the website changes (`caribou-site/docs/deploying.md`).
+- [ ] Google Play: `release/publish-play.sh vX.Y.Z` uploads the bundle as a
+      draft release on the internal testing track. Roll it out to the
+      testers in the Play Console, install it from Play on a phone, and
+      promote it to production there once it checks out. A phone with the
+      APK from the GitHub release installed takes the Play build as an
+      update, and the reverse, since both carry the app signing key.
+- [ ] App Store: in App Store Connect, set the version string to `X.Y.Z`,
+      select the uploaded build and submit it for review.
 
 ## Version locations
 
@@ -270,15 +303,14 @@ The release scripts override `Version` at build time with the tag's
 version, through the linker (`-X` in `go_ldflags`, `release/common.sh`). The
 checked-in value is what `go build` and `go install` from the tag report.
 
-The mobile apps are versioned separately and bumped when a mobile build is
-released:
-
-| File | Field | Note |
-| --- | --- | --- |
-| `wallet/android/app/build.gradle` | `versionName`, `versionCode` | `versionCode` must increase on every Play upload |
-| `wallet/ios/project.yml` | `MARKETING_VERSION` | `CFBundleVersion` is set by `wallet/ios/release.sh` from the commit count |
-
 Derived from the tag at build time, no edit needed:
+
+- `wallet/android/app/build.gradle` (`versionName`, `versionCode`):
+  `package-android.sh` passes the tag's version and the commit count as
+  Gradle properties. The checked-in defaults serve builds from source.
+- `wallet/ios/project.yml` (`MARKETING_VERSION`, `CURRENT_PROJECT_VERSION`):
+  `package-ios.sh` passes the tag's `X.Y.Z` and the commit count to
+  `wallet/ios/release.sh`.
 
 - `release/darwin/electron/package.json` (`0.0.0`; `package.js` receives
   `--version` and `--build-version`).

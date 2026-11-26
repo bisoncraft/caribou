@@ -1,0 +1,8 @@
+# SHA-256 fingerprint of the Google Play upload certificate
+# (CN=Bisoncraft LLC, O=Bisoncraft LLC, C=US; RSA 4096; valid until 2056-11-17).
+#
+# The upload key signs the Android App Bundle sent to Play and nothing a user
+# installs. release/package-android.sh fails a build whose bundle is signed by
+# anything else, which catches the two keystores being swapped. If Google
+# resets the upload key, this file changes with it.
+84:B1:98:1E:EE:C1:2E:7C:66:BA:09:88:58:6D:C8:DB:A5:00:E7:41:B4:C3:AE:FF:29:AD:38:B7:6E:16:E8:BF

@@ -1,16 +1,19 @@
 # Release packaging
 
 Scripts that build, sign and package the Caribou desktop app and the
-command-line `caribou` binary for Linux, Windows and macOS, all from a Linux
-host. Each script takes a release tag and produces its artifacts with no
-further input:
+command-line `caribou` binary for Linux, Windows and macOS, and the Android
+app, all from a Linux host, and the iOS app from a Mac. Each script takes a
+release tag and produces its artifacts with no further input:
 
 ```bash
 release/package-linux.sh   v1.2.0   # .deb + .tar.gz (amd64)
 release/package-windows.sh v1.2.0   # signed setup.exe + .zip (amd64)
 release/package-darwin.sh  v1.2.0   # notarized .dmg (x86_64 and arm64)
 release/package-cli.sh     v1.2.0   # command-line archives (see below)
-release/release.sh         v1.2.0   # all four, one SHA256SUMS + GPG signature, draft GitHub release
+release/package-android.sh v1.2.0   # signed .apk + .aab for Google Play (arm64)
+release/release.sh         v1.2.0   # all five, one SHA256SUMS + GPG signature, draft GitHub release
+release/publish-play.sh    v1.2.0   # upload the .aab to a Google Play testing track
+release/package-ios.sh     v1.2.0   # on a Mac: signed App Store .ipa, optional upload
 ```
 
 Every release build carries the `xmr` tag. The prebuilt
@@ -35,16 +38,17 @@ the tag being built before they are linked.
 4. Inside the image: web UI build, Go build, signing, packaging. Outputs land
    in `release/out/<version>/<os>/`.
 
-Toolchain caches (Go, npm, Electron, dotnet) persist in `release/out/.cache`
-across runs. `release/out` and `release/.env` are gitignored.
+Toolchain caches (Go, npm, Electron, dotnet, Gradle) persist in
+`release/out/.cache` across runs. `release/out` and `release/.env` are gitignored.
 
 ## The builder image
 
 `release/Dockerfile` builds `caribou-builder` on Ubuntu 22.04, which fixes
 the Linux binary's glibc and WebKitGTK floor at Ubuntu 22.04 / Debian 12. It
 holds Go, Node, MinGW, an aarch64 Linux cross compiler, NSIS, rcodesign,
-jsign, osslsigncode, genisoimage and libdmg-hfsplus, and an osxcross
-toolchain when a macOS SDK is available.
+jsign, osslsigncode, genisoimage and libdmg-hfsplus, an osxcross toolchain
+when a macOS SDK is available, and the Android toolchain: a JDK, the SDK
+platform, build tools and platform-tools, the NDK and bundletool.
 Every download is pinned by checksum in the Dockerfile.
 
 The image builds automatically on first use as `caribou-builder:<base>`.
@@ -83,6 +87,19 @@ comments there say where each value comes from. In short:
   certificate profile, and a service principal holding the "Artifact Signing
   Certificate Profile Signer" role. A local PKCS#12 keystore with a
   self-signed certificate exercises the same code path for testing.
+- **Android**: two keystores made with `keytool`. The app signing key signs
+  the APK and is the app's permanent identity on a device; a copy is enrolled
+  in Play App Signing, so Google Play signs what it serves with the same key
+  and a user can move between the two channels without reinstalling. The
+  upload key signs the bundle sent to Play and can be reset by Google. Both
+  certificates are pinned in `release/android/`, and `package-android.sh`
+  fails a build signed by anything else. The app signing key cannot be reset
+  or recovered, so it needs an offline backup.
+- **Google Play**: a service account key for the Google Play Developer API,
+  invited in the Play Console with permission to release to testing tracks.
+- **iOS**: nothing in `release/.env` beyond the Team ID. Signing happens on
+  the Mac through Xcode with a distribution certificate Apple holds; see
+  the iOS notes below.
 - **Manifest**: the GPG key that signs `SHA256SUMS`.
 
 `--no-sign` builds without any signing; `--no-notarize` signs but skips the
@@ -163,6 +180,79 @@ search order on Windows.
 
 FreeBSD, OpenBSD and other Linux architectures have no prebuilt XMR library
 and are not built.
+
+**Android.** `package-android.sh` builds the mobile web bundle, binds the Go
+core with gomobile (`wallet/android/bind.sh`, at the gomobile version pinned
+in `go.mod`), and runs the Gradle build in `wallet/android` for the mainnet
+flavor. Gradle is the version the committed wrapper names, checked against
+`distributionSha256Sum`, and every plugin and library it resolves is checked
+against `wallet/android/gradle/verification-metadata.xml`. Two artifacts come
+out, both arm64 and both carrying the XMR library and the `libc++_shared.so`
+it was built with:
+
+- `caribou-<version>-android-arm64.apk`, signed with the app signing key
+  (APK signature schemes 1 to 3). It goes into `dist/` and the GitHub release.
+- `caribou-<version>.aab`, the Android App Bundle for Google Play, signed
+  with the upload key. It stays in `out/<version>/android/`.
+
+Gradle emits both unsigned and the script signs them, so the keystore
+passwords never reach Gradle. After signing, the script checks each signer
+against its pin, the package name, version name and version code, that every
+native library is stored page-aligned with 16 KB segment alignment (required
+on Android 15 devices with 16 KB pages and by Google Play), that the XMR
+library in the APK is byte for byte the verified one, and that bundletool
+accepts the bundle.
+
+`versionName` is the tag's version. `versionCode` is the number of commits in
+the history of the commit being built, the build number `package-ios.sh` gives
+the iOS app from the same commit. Google Play takes a version code once and
+only above every one it has seen, so rebuilding an uploaded commit, or
+building from a branch with fewer commits than the last upload, needs
+`--build <N>` (`--android-build <N>` through `release.sh`).
+
+`publish-play.sh` uploads the bundle through the Google Play Developer API
+and creates a draft release on the internal testing track; `--rollout` makes
+it available to the track's testers at once, `--track alpha` or `beta`
+selects closed or open testing, and `--check` has Google validate the upload
+and then discards it. Promotion to production is done in the Play Console.
+The API can neither create the app nor accept its first build: the app
+record, the first bundle and the Play App Signing enrollment are done by hand
+in the Console. On that first upload, choose to use the existing app signing
+key instead of a Google-generated one, before the bundle goes up.
+
+Nothing on Linux runs the app, so install the APK on an arm64 device before
+publishing (`adb install`), and confirm that it installs over the previous
+release.
+
+**iOS.** The app is built on a Mac by `package-ios.sh`, which does not use
+the builder image: compiling the Swift shell and its asset catalog, signing
+for the App Store and uploading need Xcode. It exports the tag like the other
+scripts, checks Xcode and XcodeGen against the versions pinned at its top and
+Go and Node against the ones pinned in `release/Dockerfile`, verifies the two
+iOS XMR libraries against `SHA256SUMS`, and then runs `wallet/ios/bind.sh`,
+XcodeGen and `wallet/ios/release.sh` in the export. The result is
+`out/<version>/ios/Caribou-<version>-<build>.ipa` and a zip of its debug
+symbols. Before anything is uploaded, the script checks the signature of the
+app and both embedded frameworks, that the signer is a distribution
+certificate of the expected team, that the provisioning profile is an App
+Store profile for the bundle ID, that `get-task-allow` is off, and the
+identifier, version and build number in the bundle. `--upload` then
+validates and uploads the build; a few minutes later it appears in
+TestFlight, or fails processing, which `xcrun altool --build-status` reports
+(`wallet/ios/README.md`).
+
+The App Store version is the tag's `X.Y.Z` with any pre-release suffix
+dropped, since `CFBundleShortVersionString` allows three integers only; the
+Go core still reports the full version. The build number is the commit count,
+as on Android.
+
+Signing is Xcode's automatic signing with a cloud-managed distribution
+certificate, so the Mac holds no signing key and several people can cut an
+iOS release, each signed into Xcode with their own Apple ID (Admin or Account
+Holder role). An App Store Connect API key with the Admin role can provision
+too. A key with the Developer role, such as the one the desktop release
+notarizes with, can only upload: set `ASC_KEY_NO_PROVISIONING=1` with it, so
+that provisioning goes through the signed-in Apple ID.
 
 ## Release checklist
 

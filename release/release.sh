@@ -1,10 +1,16 @@
 #!/usr/bin/env bash
-# Build every desktop platform and the command-line archives for a release
-# tag, collect the artifacts, write one GPG-signed SHA256SUMS covering all of
-# them, and optionally open a draft GitHub release.
+# Build every desktop platform, the command-line archives and the Android APK
+# for a release tag, collect the artifacts, write one GPG-signed SHA256SUMS
+# covering all of them, and optionally open a draft GitHub release.
 #
 #   release/release.sh v1.2.0 [--skip-linux] [--skip-windows] [--skip-darwin] [--skip-cli]
+#                             [--skip-android] [--android-build <N>]
 #                             [--publish [--notes <file>]]
+#
+# The Android App Bundle that package-android.sh also builds is for Google
+# Play only and stays in out/<version>/android/; release/publish-play.sh
+# uploads it. The iOS app is built on a Mac by release/package-ios.sh and is
+# distributed through the App Store alone, so it has no artifact here.
 #
 # Common options (--ref, --no-sign, --no-notarize, --xmr-libs, --build-image)
 # are forwarded to every package script. GPG_KEY_ID in release/.env/env.sh
@@ -16,8 +22,11 @@ usage() {
 	cat <<USAGE
 usage: $(basename "$0") vX.Y.Z [options]
 $(common_usage)
-  --skip-linux, --skip-windows, --skip-darwin, --skip-cli
+  --skip-linux, --skip-windows, --skip-darwin, --skip-cli, --skip-android
                      leave that platform, or the command-line archives, out
+  --android-build <N>
+                     versionCode of the Android build, when the default (the
+                     commit count) will not do; see package-android.sh --help
   --publish          create a draft GitHub release for the tag and upload dist/
   --notes <file>     release notes for the draft, instead of the notes GitHub
                      generates from the pull requests since the previous
@@ -26,7 +35,7 @@ USAGE
 }
 
 parse_common_args "$@"
-skip_linux=0 skip_windows=0 skip_darwin=0 skip_cli=0 publish=0 notes=""
+skip_linux=0 skip_windows=0 skip_darwin=0 skip_cli=0 skip_android=0 android_build="" publish=0 notes=""
 set -- "${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"}"
 while [[ $# -gt 0 ]]; do
 	case "$1" in
@@ -34,6 +43,12 @@ while [[ $# -gt 0 ]]; do
 	--skip-windows) skip_windows=1 ;;
 	--skip-darwin) skip_darwin=1 ;;
 	--skip-cli) skip_cli=1 ;;
+	--skip-android) skip_android=1 ;;
+	--android-build)
+		[[ $# -ge 2 ]] || die "--android-build needs a number"
+		android_build="$2"
+		shift
+		;;
 	--publish) publish=1 ;;
 	--notes)
 		[[ $# -ge 2 ]] || die "--notes needs a file"
@@ -65,14 +80,17 @@ first=()
 [[ "$skip_linux" == 1 ]] || { "${RELEASE_DIR}/package-linux.sh" "${fwd[@]}" "${first[@]}"; first=(); }
 [[ "$skip_windows" == 1 ]] || { "${RELEASE_DIR}/package-windows.sh" "${fwd[@]}" "${first[@]}"; first=(); }
 [[ "$skip_darwin" == 1 ]] || { "${RELEASE_DIR}/package-darwin.sh" "${fwd[@]}" "${first[@]}"; first=(); }
-[[ "$skip_cli" == 1 ]] || "${RELEASE_DIR}/package-cli.sh" "${fwd[@]}" "${first[@]}"
+[[ "$skip_cli" == 1 ]] || { "${RELEASE_DIR}/package-cli.sh" "${fwd[@]}" "${first[@]}"; first=(); }
+android=()
+[[ -n "$android_build" ]] && android=(--build "$android_build")
+[[ "$skip_android" == 1 ]] || "${RELEASE_DIR}/package-android.sh" "${fwd[@]}" "${first[@]}" "${android[@]}"
 
 dist="${OUT_DIR}/dist"
 rm -rf "$dist"
 mkdir -p "$dist"
 shopt -s nullglob
 cp "${OUT_DIR}"/linux/*.{deb,tar.gz} "${OUT_DIR}"/windows/*.{exe,zip} "${OUT_DIR}"/darwin/*.{dmg,zip} \
-	"${OUT_DIR}"/cli/*.{tar.gz,zip} "$dist/" 2>/dev/null || true
+	"${OUT_DIR}"/cli/*.{tar.gz,zip} "${OUT_DIR}"/android/*.apk "$dist/" 2>/dev/null || true
 shopt -u nullglob
 [[ -n "$(ls -A "$dist")" ]] || die "no artifacts found under ${OUT_DIR}"
 
