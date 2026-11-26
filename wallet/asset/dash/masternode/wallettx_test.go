@@ -61,7 +61,7 @@ func TestTrackedIsWhatTheWalletGave(t *testing.T) {
 	e := newEnv(t)
 	e.own(map[uint32][20]byte{1: e.idA}, 0)
 	m := e.manager()
-	if err := m.Track(rawTx(t, e.txA), 0); err != nil {
+	if err := m.TrackWallet(rawTx(t, e.txA), 0); err != nil {
 		t.Fatal(err)
 	}
 	ids, err := m.Tracked()
@@ -70,6 +70,20 @@ func TestTrackedIsWhatTheWalletGave(t *testing.T) {
 	}
 	// Tracked again by the manager (as after a reorg), it is not the wallet's.
 	if err := e.store.Save(Update{Track: [][]byte{rawTx(t, e.txA)}}); err != nil {
+		t.Fatal(err)
+	}
+	if ids, err := m.Tracked(); err != nil || len(ids) != 0 {
+		t.Fatalf("%v %v", ids, err)
+	}
+}
+
+// A transaction added with Track is not the wallet's to drop: a dissolution
+// the wallet's actor made may pay nothing to it, so the wallet never has it.
+func TestTrackIsNotTheWalletsToDrop(t *testing.T) {
+	e := newEnv(t)
+	e.own(map[uint32][20]byte{1: e.idA}, 0)
+	m := e.manager()
+	if err := m.Track(rawTx(t, e.txA), 0); err != nil {
 		t.Fatal(err)
 	}
 	if ids, err := m.Tracked(); err != nil || len(ids) != 0 {

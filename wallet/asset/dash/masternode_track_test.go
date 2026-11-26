@@ -58,6 +58,7 @@ type fakeSource struct {
 	ch     chan *wallet.TransactionNotifications
 	synced int32
 	from   atomic.Int32 // the height Transactions was asked from
+	used   atomic.Int32 // how many times Used was asked
 	mu     sync.Mutex
 	has    map[chainhash.Hash]bool
 }
@@ -76,6 +77,11 @@ func (s *fakeSource) Transactions(height int32, _ <-chan struct{}) (*wallet.GetT
 }
 
 func (s *fakeSource) Synced() int32 { return s.synced }
+
+func (s *fakeSource) Used() (bool, error) {
+	s.used.Add(1)
+	return len(s.res.MinedTransactions)+len(s.res.UnminedTransactions) > 0, nil
+}
 
 func (s *fakeSource) Has(id chainhash.Hash) (bool, error) {
 	s.mu.Lock()
@@ -276,13 +282,13 @@ func TestDiscoverWaitsForKeysAndRunsOnce(t *testing.T) {
 		t.Fatalf("needs keys: %v %v", need, err)
 	}
 
-	if dw.discover(t.Context(), mgr) || chain.tips.Load() != 0 {
+	if discovered(dw, t, mgr) || chain.tips.Load() != 0 {
 		t.Fatalf("discovered while locked without keys: %d", chain.tips.Load())
 	}
 	if err := mgr.PrimeOwnerKeys(); err != nil {
 		t.Fatal(err)
 	}
-	if !dw.discover(t.Context(), mgr) || chain.tips.Load() == 0 {
+	if !discovered(dw, t, mgr) || chain.tips.Load() == 0 {
 		t.Fatalf("did not discover with the keys: %d", chain.tips.Load())
 	}
 	// A Refresh follows, to prove what it found.
@@ -302,7 +308,7 @@ func TestDiscoverReportsAServerThatRefuses(t *testing.T) {
 	if err := mgr.PrimeOwnerKeys(); err != nil {
 		t.Fatal(err)
 	}
-	if !dw.discover(t.Context(), mgr) {
+	if !discovered(dw, t, mgr) {
 		t.Fatal("a refused discovery is retried")
 	}
 	if done, err := mgr.Discovered(); err != nil || done {
@@ -334,7 +340,7 @@ func TestDiscoverIsNotRepeated(t *testing.T) {
 	if err := store.Save(masternode.Update{Cursor: &masternode.Cursor{Height: 910}}); err != nil {
 		t.Fatal(err)
 	}
-	if !dw.discover(t.Context(), mgr) || chain.tips.Load() != 0 {
+	if !discovered(dw, t, mgr) || chain.tips.Load() != 0 {
 		t.Fatalf("discovered again: %d", chain.tips.Load())
 	}
 }
@@ -398,7 +404,7 @@ func TestTrackLoopUntracksWhatTheWalletDropped(t *testing.T) {
 	stop()
 
 	// At start: tracked by an earlier session, and not in the wallet.
-	if err := mgr.Track(reg, 0); err != nil {
+	if err := mgr.TrackWallet(reg, 0); err != nil {
 		t.Fatal(err)
 	}
 	src = newFakeSource(&wallet.GetTransactionsResult{})
@@ -483,7 +489,7 @@ func TestDiscoverIsTriedAgainAfterATransientFailure(t *testing.T) {
 	if err := mgr.PrimeOwnerKeys(); err != nil {
 		t.Fatal(err)
 	}
-	if dw.discover(t.Context(), mgr) {
+	if discovered(dw, t, mgr) {
 		t.Fatal("a Discover that could not read the tip was taken for done")
 	}
 	if done, err := mgr.Discovered(); err != nil || done {
@@ -563,4 +569,128 @@ func TestTrackLoopGetsWhatTheWalletRecordsBeforeItStarts(t *testing.T) {
 		snap, err := store.Load()
 		return err == nil && len(snap.Tracked) == 1
 	})
+}
+
+func discovered(dw *dashWallet, t *testing.T, mgr *masternode.Manager) bool {
+	t.Helper()
+	done, _ := dw.discover(t.Context(), mgr)
+	return done
+}
+
+// A failing Discover or transaction waits longer each time, so a wake from a
+// notification does not read the shared history again.
+func TestBackoffGrowsToItsCap(t *testing.T) {
+	want := []time.Duration{time.Minute, 2 * time.Minute, 4 * time.Minute, 8 * time.Minute}
+	for i, w := range want {
+		if got := backoff(i + 1); got != w {
+			t.Fatalf("backoff(%d) = %v, want %v", i+1, got, w)
+		}
+	}
+	if got := backoff(50); got != retryMax {
+		t.Fatalf("backoff(50) = %v, want %v", got, retryMax)
+	}
+}
+
+// runLoop starts the track loop over src, and stops it when the test ends.
+func runLoop(t *testing.T, dw *dashWallet, mgr *masternode.Manager, src *fakeSource) {
+	t.Helper()
+	ctx, cancel := context.WithCancel(t.Context())
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		dw.trackLoop(ctx, mgr, src)
+	}()
+	t.Cleanup(func() { cancel(); wg.Wait() })
+}
+
+func wake(t *testing.T, src *fakeSource, n int) {
+	t.Helper()
+	for range n {
+		src.ch <- &wallet.TransactionNotifications{}
+	}
+	time.Sleep(50 * time.Millisecond)
+}
+
+// A Discover that failed is not run again by a notification, which a block or
+// an incoming payment each brings: it would read the shared history every time.
+func TestTrackLoopDoesNotRetryDiscoverOnAWake(t *testing.T) {
+	dw := openDashSharedWallet(&asset.WalletConfig{DataDir: t.TempDir()}, RegressionNetParams, util.Disabled)
+	chain := &chainStub{} // no header at the tip: Discover fails
+	mgr, _ := trackingManager(t, chain, seqKeys{})
+	if err := mgr.PrimeOwnerKeys(); err != nil {
+		t.Fatal(err)
+	}
+	src := newFakeSource(&wallet.GetTransactionsResult{
+		UnminedTransactions: []wallet.TransactionSummary{{Transaction: vectorRaw(t, "coinbase")}},
+	})
+	runLoop(t, dw, mgr, src)
+	waitFor(t, "the first Discover", func() bool { return chain.tips.Load() > 0 })
+	before := chain.tips.Load()
+	wake(t, src, 5)
+	if got := chain.tips.Load(); got != before {
+		t.Fatalf("Discover ran %d more times on wakes", got-before)
+	}
+}
+
+// A wallet with no transaction is new, and the shared history is not read for
+// it.
+func TestTrackLoopDoesNotDiscoverForAnEmptyWallet(t *testing.T) {
+	dw := openDashSharedWallet(&asset.WalletConfig{DataDir: t.TempDir()}, RegressionNetParams, util.Disabled)
+	chain := &chainStub{}
+	mgr, _ := trackingManager(t, chain, seqKeys{})
+	if err := mgr.PrimeOwnerKeys(); err != nil {
+		t.Fatal(err)
+	}
+	src := newFakeSource(&wallet.GetTransactionsResult{})
+	runLoop(t, dw, mgr, src)
+	wake(t, src, 3)
+	if chain.tips.Load() != 0 {
+		t.Fatal("discovered for a wallet with no transaction")
+	}
+}
+
+// A wallet whose Discover has run is not read for its transactions again.
+func TestTrackLoopDoesNotCheckTheHistoryOnceDiscovered(t *testing.T) {
+	dw := openDashSharedWallet(&asset.WalletConfig{DataDir: t.TempDir()}, RegressionNetParams, util.Disabled)
+	mgr, store := trackingManager(t, &chainStub{}, seqKeys{})
+	if err := store.Save(masternode.Update{Cursor: &masternode.Cursor{Height: 910}}); err != nil {
+		t.Fatal(err)
+	}
+	src := newFakeSource(&wallet.GetTransactionsResult{})
+	runLoop(t, dw, mgr, src)
+	wake(t, src, 2)
+	if n := src.used.Load(); n != 0 {
+		t.Fatalf("read the wallet's history %d times", n)
+	}
+}
+
+// A transaction that could not be tracked is not tried on every wake, which
+// would spend its tries in a few notifications, and when it is given up the
+// height saved stops at its block, so a restart gives it again.
+func TestTrackLoopGivesUpAtItsBlock(t *testing.T) {
+	first, max := retryFirst, retryMax
+	retryFirst, retryMax = time.Millisecond, 2*time.Millisecond
+	t.Cleanup(func() { retryFirst, retryMax = first, max })
+
+	dw := openDashSharedWallet(&asset.WalletConfig{DataDir: t.TempDir()}, RegressionNetParams, util.Disabled)
+	mgr, store := trackingManager(t, &chainStub{}, seqKeys{})
+	if err := store.Save(masternode.Update{Cursor: &masternode.Cursor{Height: 910}}); err != nil {
+		t.Fatal(err)
+	}
+	// It has the type of a registration and is not one.
+	bad := []byte{0x03, 0x00, 0x01, 0x00, 0xff}
+	src := newFakeSource(&wallet.GetTransactionsResult{
+		MinedTransactions: []wallet.Block{{Height: 700, Transactions: []wallet.TransactionSummary{{Transaction: bad}}}},
+	})
+	src.synced = 5000
+	runLoop(t, dw, mgr, src)
+	waitFor(t, "the height to be saved at the given up block", func() bool {
+		snap, err := store.Load()
+		return err == nil && snap.TxRead == 700
+	})
+	wake(t, src, 3)
+	if snap, err := store.Load(); err != nil || snap.TxRead != 700 {
+		t.Fatalf("height %d past a transaction given up: %v", snap.TxRead, err)
+	}
 }

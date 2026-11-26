@@ -1031,3 +1031,57 @@ func TestReorgedHintIsTriedOnce(t *testing.T) {
 		t.Fatalf("%d more merkle requests for a registration that is not mined", got-before)
 	}
 }
+
+// A registration the server has not known for a day's blocks was dropped, such
+// as by another participant spending their contribution, which the wallet may
+// never see. It is not asked for forever.
+func TestRegistrationUnknownToTheServerIsUntracked(t *testing.T) {
+	e, m := trackedEnv(t)
+	e.chain.verboseErr = &electrum.RPCError{Code: 2, Message: "daemon error: DaemonError({'code': -5, 'message': 'No such mempool or blockchain transaction. Use gettransaction for wallet transactions.'})"}
+	if err := m.Refresh(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	advance := func(n int32) {
+		e.chain.tip += n
+		e.chain.headers[e.chain.tip] = synthHeader(chainhash.Hash{3}, e.chain.tip)
+	}
+	advance(unknownLimit - 1)
+	_ = m.Refresh(t.Context())
+	if len(e.snapshot().Tracked) != 1 {
+		t.Fatal("untracked early")
+	}
+	advance(1)
+	_ = m.Refresh(t.Context())
+	if len(e.snapshot().Tracked) != 0 {
+		t.Fatal("a registration the server does not know is still tracked")
+	}
+}
+
+// What a registration that is no longer tracked was asked is forgotten, so the
+// maps do not keep an id for the life of the process.
+func TestUntrackedRegistrationIsNotRemembered(t *testing.T) {
+	e, m := trackedEnv(t)
+	e.chain.verboseErr = &electrum.RPCError{Code: 2, Message: "daemon error: DaemonError({'code': -5, 'message': 'No such mempool or blockchain transaction. Use gettransaction for wallet transactions.'})"}
+	if err := m.Refresh(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	m.syncMu.Lock()
+	n := len(m.asked)
+	m.syncMu.Unlock()
+	if n != 1 {
+		t.Fatalf("setup: %d asked", n)
+	}
+	for id := range e.snapshot().Tracked {
+		if err := m.Untrack(id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := m.Refresh(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	m.syncMu.Lock()
+	defer m.syncMu.Unlock()
+	if len(m.asked) != 0 || len(m.unknownSince) != 0 {
+		t.Fatalf("%d asked, %d unknown remembered", len(m.asked), len(m.unknownSince))
+	}
+}

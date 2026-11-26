@@ -33,6 +33,7 @@ import (
 	"github.com/bisoncraft/caribou/wallet/utxowallet/wallet/txauthor"
 	"github.com/bisoncraft/caribou/wallet/utxowallet/walletdb"
 	_ "github.com/bisoncraft/caribou/wallet/utxowallet/walletdb/bdb" // bdb init() registers the walletdb driver
+	"github.com/bisoncraft/caribou/wallet/utxowallet/wtxmgr"
 	"github.com/btcsuite/btcd/btcjson"
 	"github.com/btcsuite/btcd/btcutil"
 	"github.com/btcsuite/btcd/chaincfg"
@@ -119,6 +120,9 @@ type ChainConfig struct {
 	// the wallet reports, including the ones it pushes itself. It must not
 	// block.
 	AdjustBalance func(*asset.Balance)
+	// Leases is set by a wallet whose outputs are leased with LeaseOutput. Only
+	// then does Balance read the leased amount, which it does not otherwise.
+	Leases bool
 	// OnOpen, if set, is called with the wallet once it is open and before it
 	// synchronizes with the chain, so a subscriber sees every transaction the
 	// synchronization records. It must not block.
@@ -668,9 +672,12 @@ func (w *NativeWallet) Balance() (*asset.Balance, error) {
 	}
 	// Leased outputs are set aside, so they are in neither Spendable nor the
 	// totals above: they are locked.
-	leased, err := w.btcw.LeasedBalance()
-	if err != nil {
-		return nil, fmt.Errorf("native: leased balance error: %w", err)
+	var leased btcutil.Amount
+	if w.cfg.Leases {
+		leased, err = w.btcw.LeasedBalance()
+		if err != nil {
+			return nil, fmt.Errorf("native: leased balance error: %w", err)
+		}
 	}
 	bal := &asset.Balance{
 		Available: uint64(bals.Spendable),
@@ -1112,6 +1119,27 @@ func (w *NativeWallet) blockLoop(ctx context.Context) {
 			return
 		}
 	}
+}
+
+// LeaseOutput leases the output for duration, which sets it aside from the
+// spendable balance, and pushes the balance now and again when the lease ends,
+// as the wallet has no notification for either. It is for a wallet whose
+// ChainConfig has Leases set.
+func (w *NativeWallet) LeaseOutput(id wtxmgr.LockID, op wire.OutPoint, duration time.Duration) (time.Time, error) {
+	if w.btcw == nil {
+		return time.Time{}, errors.New("native: wallet not connected")
+	}
+	expiry, err := w.btcw.LeaseOutput(id, op, duration)
+	if err != nil {
+		return time.Time{}, err
+	}
+	w.PushBalance()
+	time.AfterFunc(time.Until(expiry)+time.Second, func() {
+		if ctx, _ := w.ctx.Load().(context.Context); ctx != nil && ctx.Err() == nil {
+			w.PushBalance()
+		}
+	})
+	return expiry, nil
 }
 
 // PushBalance reads the balance and emits it, for a change the wallet's own

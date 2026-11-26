@@ -45,6 +45,12 @@ import (
 // as the spend of a masternode of the wallet's, and stays tracked until then:
 // Untrack removes one that is not wanted.
 func (m *Manager) Track(raw []byte, height int32) error {
+	return m.track(raw, height, false)
+}
+
+// TrackWallet is Track for a transaction the wallet has, which the caller
+// untracks once the wallet no longer does.
+func (m *Manager) TrackWallet(raw []byte, height int32) error {
 	return m.track(raw, height, true)
 }
 
@@ -217,6 +223,25 @@ func (m *Manager) Refresh(ctx context.Context) error {
 			up.Registrations = append(up.Registrations, Registration{Height: height, Block: block, Tx: raw})
 			live[id] = c.mn
 			known[id] = struct{}{}
+			delete(m.unknownSince, id)
+		default:
+			// Not mined. One the server has not known for a day's blocks was
+			// dropped, such as when another participant spent their
+			// contribution, which the wallet may never see, and is not waited
+			// for.
+			at, asked := m.asked[id]
+			if !asked {
+				delete(m.unknownSince, id)
+				break
+			}
+			if _, ok := m.unknownSince[id]; !ok {
+				m.unknownSince[id] = at
+			}
+			if tip-m.unknownSince[id] >= unknownLimit {
+				up.Untrack = append(up.Untrack, id)
+				delete(m.unknownSince, id)
+				delete(m.asked, id)
+			}
 		}
 	}
 
@@ -287,6 +312,27 @@ func (m *Manager) Refresh(ctx context.Context) error {
 	m.mu.Lock()
 	for _, id := range up.Untrack {
 		delete(m.hints, id)
+		delete(m.asked, id)
+		delete(m.unknownSince, id)
+	}
+	// What is not waited for any more, because Untrack was called for it, is
+	// not remembered as asked.
+	waiting := make(map[chainhash.Hash]struct{}, len(tracked)+len(dissolutions))
+	for id := range tracked {
+		waiting[id] = struct{}{}
+	}
+	for _, c := range dissolutions {
+		waiting[c.txid] = struct{}{}
+	}
+	for id := range m.asked {
+		if _, ok := waiting[id]; !ok {
+			delete(m.asked, id)
+		}
+	}
+	for id := range m.unknownSince {
+		if _, ok := waiting[id]; !ok {
+			delete(m.unknownSince, id)
+		}
 	}
 	for _, r := range up.Registrations {
 		if tx, err := decodeTx(r.Tx); err == nil {
@@ -532,4 +578,7 @@ const (
 	// idleLimit is how many Refreshes a tracked dissolution spends nothing the
 	// wallet holds before it is no longer tracked.
 	idleLimit = 144
+	// unknownLimit is how many blocks a tracked registration that the server
+	// does not know is waited for.
+	unknownLimit = 144
 )
