@@ -62,7 +62,7 @@ set -euo pipefail
 # This is not the Xcode pinned in wallet/asset/xmr/xcode/PIN, which supplies
 # the SDK the XMR libraries and the macOS desktop app are cross-compiled with.
 IOS_XCODE_VERSION="27.2"
-IOS_XCODEGEN_VERSION="2.48.0"
+IOS_XCODEGEN_VERSION="2.49.0"
 
 BUNDLE_ID="com.bisoncraft.caribou"
 APP_NAME="Caribou"
