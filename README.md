@@ -195,7 +195,7 @@ shift based on testing, funding, and partner onboarding.
 
 Requirements:
 
-- Go 1.25 or later.
+- Go 1.26 or later.
 - Node.js 20.19+ or 22.13+ with npm, for the web UI.
 - For the desktop app: cgo, plus the GTK and WebKitGTK development packages
   on Linux (`libgtk-3-dev libwebkit2gtk-4.1-dev`).

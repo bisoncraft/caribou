@@ -57,7 +57,7 @@ npm ci                           # one-time / after lockfile changes
 npm run build --workspace=desktop  # writes desktop/dist/bundle.js + dist/index.html
 ```
 
-You need Go 1.25 or later and Node.js 20.19+ or 22.13+ (the versions CI tests).
+You need Go 1.26 or later and Node.js 20.19+ or 22.13+ (the versions CI tests).
 
 The UI is an npm workspace with a single lockfile at `wallet/appserver`, so
 install from there; `npm ci` run inside `desktop/` alone skips the shared
