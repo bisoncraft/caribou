@@ -434,7 +434,9 @@ func (dw *dashWallet) CancelMasternodeOffer(ctx context.Context, offerID string)
 // transaction only when its own publish is refused, not when another
 // participant spends their input, so one still stored is sent to the backend
 // again: the wallet drops it if the backend refuses it, and it is still
-// pending if the backend takes it.
+// pending if the backend takes it. The wallet also drops it, with no error,
+// when the backend says it is already in a block, which means it is mined and
+// the wallet has not seen the block yet.
 func registrationGone(fw fundingWallet, h chainhash.Hash) error {
 	txid := h.String()
 	res, err := fw.GetTransaction(h)
@@ -452,16 +454,21 @@ func registrationGone(fw fundingWallet, h chainhash.Hash) error {
 		return err
 	}
 	// A refusal is how a registration that can never mine is found out: the
-	// wallet drops it, and the lookup below says so.
-	_ = fw.PublishBisonTx(tx, registrationLabel)
+	// wallet drops it, and the lookup below says so. A drop without a refusal
+	// means the backend has it in a block.
+	pubErr := fw.PublishBisonTx(tx, registrationLabel)
 	_, err = fw.GetTransaction(h)
 	switch {
+	case errors.Is(err, wallet.ErrNoTx) && pubErr == nil:
+		return fmt.Errorf("the registration %s is mined: the backend has it in a block the wallet has not seen yet", txid)
 	case errors.Is(err, wallet.ErrNoTx):
 		return nil
 	case err != nil:
 		return err
+	case pubErr != nil:
+		return fmt.Errorf("the registration %s is pending: it was broadcast and the wallet still has it, but the backend did not refuse it: %w", txid, pubErr)
 	}
-	return fmt.Errorf("the registration %s is pending: it was broadcast, the wallet still has it and the backend did not refuse it", txid)
+	return fmt.Errorf("the registration %s is pending: it was broadcast, the wallet still has it and the backend accepted it again", txid)
 }
 
 // usableOffer loads an offer that can still review and sign.

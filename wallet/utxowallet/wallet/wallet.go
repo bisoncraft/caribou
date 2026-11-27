@@ -3378,7 +3378,7 @@ func (w *Wallet) resendUnminedTxs() {
 	}
 
 	for _, tx := range txs {
-		txHash, err := w.publishTransaction(tx)
+		txHash, err := w.publishTransaction(tx, true)
 		if err != nil {
 			log.Debugf("Unable to rebroadcast transaction %v: %v",
 				tx.TxHash(), err)
@@ -4037,6 +4037,7 @@ func (w *Wallet) reliablyPublishTransaction(tx *bisonwire.Tx,
 	// Along the way, we'll extract our relevant destination addresses from
 	// the transaction.
 	var ourAddrs []btcutil.Address
+	var stored bool
 	err = walletdb.Update(w.db, func(dbTx walletdb.ReadWriteTx) error {
 		addrmgrNs := dbTx.ReadWriteBucket(waddrmgrNamespaceKey)
 		for _, txOut := range tx.TxOut {
@@ -4062,10 +4063,18 @@ func (w *Wallet) reliablyPublishTransaction(tx *bisonwire.Tx,
 			}
 		}
 
-		// If there is a label we should write, get the namespace key
-		// and record it in the tx store.
+		// Note whether the transaction is already stored, which means an
+		// earlier broadcast of it may have reached the backend.
+		txmgrNs := dbTx.ReadWriteBucket(wtxmgrNamespaceKey)
+		hash := tx.TxHash()
+		d, err := w.TxStore.UniqueTxDetails(txmgrNs, &hash, nil)
+		if err != nil {
+			return err
+		}
+		stored = d != nil
+
+		// If there is a label we should write, record it in the tx store.
 		if len(label) != 0 {
-			txmgrNs := dbTx.ReadWriteBucket(wtxmgrNamespaceKey)
 			if err = w.TxStore.PutTxLabel(txmgrNs, tx.TxHash(), label); err != nil {
 				return err
 			}
@@ -4084,7 +4093,7 @@ func (w *Wallet) reliablyPublishTransaction(tx *bisonwire.Tx,
 		return nil, err
 	}
 
-	return w.publishTransaction(tx)
+	return w.publishTransaction(tx, stored)
 }
 
 // removeUnminedTx removes tx from the wallet's unconfirmed transaction store.
@@ -4102,8 +4111,9 @@ func (w *Wallet) removeUnminedTx(tx *bisonwire.Tx) error {
 // publishTransaction attempts to send an unconfirmed transaction to the
 // wallet's current backend. In the event that sending the transaction fails for
 // whatever reason, it will be removed from the wallet's unconfirmed transaction
-// store.
-func (w *Wallet) publishTransaction(tx *bisonwire.Tx) (*chainhash.Hash, error) {
+// store. stored reports that the transaction was already in that store before
+// this publish.
+func (w *Wallet) publishTransaction(tx *bisonwire.Tx, stored bool) (*chainhash.Hash, error) {
 	chainClient, err := w.requireChainClient()
 	if err != nil {
 		return nil, err
@@ -4142,9 +4152,11 @@ func (w *Wallet) publishTransaction(tx *bisonwire.Tx) (*chainhash.Hash, error) {
 		return nil, rpcErr
 
 	// The backend could not be reached, or did not answer, so it did not
-	// refuse the transaction, and the transaction may be in the mempool.
-	// Keep it stored.
-	case errors.Is(rpcErr, chain.ErrBackendUnavailable):
+	// refuse the transaction. A transaction already stored may be in the
+	// mempool, so keep it. A new send that was never answered is removed
+	// below, so its inputs are freed and a retry cannot build a second
+	// payment from other coins.
+	case errors.Is(rpcErr, chain.ErrBackendUnavailable) && stored:
 		log.Infof("%v: backend unavailable: %v", txid, rpcErr)
 		return nil, rpcErr
 	}
