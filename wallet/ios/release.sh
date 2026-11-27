@@ -5,6 +5,15 @@
 #   ./release.sh                 # archive + export to build/Caribou.ipa
 #   ./release.sh --upload        # ... and upload to App Store Connect
 #   ./release.sh --build 7       # override CFBundleVersion (see below)
+#   ./release.sh --version 1.2.0 # override CFBundleShortVersionString
+#   ./release.sh --upload-only   # validate and upload the .ipa a previous run
+#                                # exported, without rebuilding it. --build and
+#                                # --version then name the build expected in
+#                                # that .ipa, and a different one is refused.
+#
+# release/package-ios.sh drives this script for a release: it exports the tag,
+# passes the version and build number, checks the signed .ipa, and only then
+# comes back with --upload-only.
 #
 # Prereqs, in order:
 #   1. ./bind.sh (or CARIBOU_XMR=1 ./bind.sh) — builds Frameworks/*.xcframework
@@ -55,6 +64,12 @@
 #     (-w with no value prompts, without echoing.) Then --upload just works,
 #     with only the non-secret APPLE_ID in the environment.
 #
+# A key with the Developer role can upload a build but cannot create the
+#     distribution certificate or the App Store provisioning profile, so
+#     provisioning with it fails. Set ASC_KEY_NO_PROVISIONING=1 to keep such a
+#     key for the upload and provision through the Apple ID signed into Xcode,
+#     as in (B).
+#
 # (B) and (C) cover the *upload* only. Provisioning then needs an Apple ID
 #     signed into Xcode (Xcode > Settings > Accounts), which is the same
 #     credential, entered once in the GUI.
@@ -77,11 +92,15 @@ archive="$builddir/Caribou.xcarchive"
 export_dir="$builddir/export"
 
 upload=0
+upload_only=0
 build_number=""
+marketing_version=""
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --upload)  upload=1; shift ;;
+        --upload-only) upload=1; upload_only=1; shift ;;
         --build)   build_number="${2:?--build needs a number}"; shift 2 ;;
+        --version) marketing_version="${2:?--version needs a version}"; shift 2 ;;
         # Print the whole header comment block, not a fixed line range: the
         # range drifts every time CREDENTIALS grows, and --help is exactly what
         # the failure path at the bottom tells you to read.
@@ -114,7 +133,9 @@ fi
 # `set -u`, bash 3.2 -- still /bin/bash on macOS -- treats a plain "${auth[@]}" on
 # an empty array as an unbound variable and aborts.
 auth=()
-if [[ -n "${ASC_KEY_ID:-}" && -n "${ASC_ISSUER_ID:-}" ]]; then
+if [[ -n "${ASC_KEY_NO_PROVISIONING:-}" ]]; then
+    echo "Provisioning with the Apple ID signed into Xcode (ASC_KEY_NO_PROVISIONING is set)"
+elif [[ -n "${ASC_KEY_ID:-}" && -n "${ASC_ISSUER_ID:-}" ]]; then
     keyfile=""
     for d in "$HOME/.appstoreconnect/private_keys" "$HOME/private_keys" \
              "$HOME/.private_keys" "./private_keys"; do
@@ -151,10 +172,14 @@ echo "Signing with team $team"
 # time, as does a rebase that drops or squashes commits. --validate-app runs
 # before --upload-app below and catches that, so the cost is a wasted archive
 # rather than a burned build number; --build N is the override.
-if [[ -z "$build_number" ]]; then
-    build_number="$(git -C "$here" rev-list --count HEAD 2>/dev/null || echo 1)"
+# With --upload-only nothing is built, so there is no number to choose: the
+# .ipa already carries one, and it is checked further down.
+if [[ "$upload_only" != "1" ]]; then
+    if [[ -z "$build_number" ]]; then
+        build_number="$(git -C "$here" rev-list --count HEAD 2>/dev/null || echo 1)"
+    fi
+    echo "Build number (CFBundleVersion): $build_number"
 fi
-echo "Build number (CFBundleVersion): $build_number"
 
 # Resolve upload credentials BEFORE the archive: discovering there are none
 # after several minutes of building is a waste, and the failure is a pure
@@ -201,9 +226,8 @@ if [[ "$upload" == "1" ]]; then
         altool_auth=(-u "$apple_id" -p "@env:$apple_pw_var")
         # An Apple ID in more than one team is ambiguous to altool, and it errors out
         # rather than picking one. ASC_PROVIDER names the org. Deliberately NOT
-        # falling back to the desktop's APPLE_TEAM_ID: that is a team id, while
-        # altool wants a provider *shortname*, and the desktop signs under a
-        # different team anyway. Harmless to omit on a single-team Apple ID.
+        # falling back to APPLE_TEAM_ID: that is a team id, while altool wants
+        # a provider *shortname*. Harmless to omit on a single-team Apple ID.
         [[ -n "${ASC_PROVIDER:-}" ]] && altool_auth+=(--asc-provider "$ASC_PROVIDER")
     else
         echo "error: no upload credentials. Use one of:" >&2
@@ -220,6 +244,8 @@ if [[ "$upload" == "1" ]]; then
         exit 1
     fi
 fi
+
+if [[ "$upload_only" != "1" ]]; then
 
 rm -rf "$archive" "$export_dir"
 mkdir -p "$builddir"
@@ -248,7 +274,8 @@ xcodebuild archive \
     -destination "generic/platform=iOS" \
     -archivePath "$archive" \
     CODE_SIGNING_ALLOWED=NO \
-    CURRENT_PROJECT_VERSION="$build_number"
+    CURRENT_PROJECT_VERSION="$build_number" \
+    ${marketing_version:+MARKETING_VERSION="$marketing_version"}
 
 # Inject the team id into a copy of the export options so the committed plist
 # stays team-agnostic.
@@ -267,14 +294,41 @@ xcodebuild -exportArchive \
     -exportPath "$export_dir" \
     -allowProvisioningUpdates ${auth[@]+"${auth[@]}"}
 
+fi # upload_only
+
 ipa="$(find "$export_dir" -maxdepth 1 -name '*.ipa' -print -quit)"
-[[ -n "$ipa" ]] || { echo "error: no .ipa produced in $export_dir" >&2; exit 1; }
-echo "Exported $ipa"
+[[ -n "$ipa" ]] || { echo "error: no .ipa in $export_dir" >&2; exit 1; }
+[[ "$upload_only" == "1" ]] || echo "Exported $ipa"
 
 if [[ "$upload" != "1" ]]; then
     echo
     echo "Not uploading (pass --upload to send it to App Store Connect)."
     exit 0
+fi
+
+# --upload-only sends whatever .ipa an earlier run left behind, so say which
+# build that is, and stop if the caller named a different one. An upload
+# cannot be taken back and uses up its build number.
+if [[ "$upload_only" == "1" ]]; then
+    info="$(mktemp "${TMPDIR:-/tmp}/caribou-ipa-info.XXXXXX")"
+    unzip -p "$ipa" 'Payload/Caribou.app/Info.plist' > "$info" || {
+        rm -f "$info"; echo "error: cannot read Payload/Caribou.app/Info.plist in $ipa" >&2; exit 1; }
+    ipa_build="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$info" 2>/dev/null || true)"
+    ipa_version="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$info" 2>/dev/null || true)"
+    rm -f "$info"
+    [[ -n "$ipa_build" && -n "$ipa_version" ]] || {
+        echo "error: $ipa has no CFBundleVersion or no CFBundleShortVersionString" >&2; exit 1; }
+    echo "$ipa holds version $ipa_version, build $ipa_build"
+    if [[ -n "$build_number" && "$build_number" != "$ipa_build" ]]; then
+        echo "error: --build $build_number was asked for, but the exported .ipa is build $ipa_build." >&2
+        echo "       Rebuild it, or pass the build number it has." >&2
+        exit 1
+    fi
+    if [[ -n "$marketing_version" && "$marketing_version" != "$ipa_version" ]]; then
+        echo "error: --version $marketing_version was asked for, but the exported .ipa is version $ipa_version." >&2
+        echo "       Rebuild it, or pass the version it has." >&2
+        exit 1
+    fi
 fi
 
 

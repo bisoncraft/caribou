@@ -8,7 +8,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        go: ['1.25', '1.26']
+        go: ['1.26', '1.27']
     steps:
       - uses: awalsh128/cache-apt-pkgs-action@acb598e5ddbc6f68a970c5da0688d2f3a9f04d05 #v1.6.0
         with:
@@ -68,19 +68,35 @@ jobs:
             go-build-${{ runner.os }}-go${{ matrix.go }}-
 
       - name: Install Linters
-        # Skip on 1.26: the pinned linter is skipped there via SKIP_GO_LINT, so
-        # installing it just wastes CI time. Bump when the matrix changes.
+        # Skip on 1.26: linting is skipped there via SKIP_GO_LINT, so
+        # installing the linter just wastes CI time. The pinned release is
+        # built with go1.27; a linter built with an older Go than the one in
+        # use, or than go.mod names, does not run. Bump both when the matrix
+        # changes.
+        #
+        # The archive is fetched and checked against the sha256 pinned here.
+        # golangci-lint's install.sh does not work for this release: its
+        # checksum file also lists an .sbom.json for every archive, and the
+        # script takes that line's hash for the archive's.
         if: matrix.go != '1.26'
-        run: "curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b $(go env GOPATH)/bin v2.6.2"
+        env:
+          GOLANGCI_LINT_VERSION: 2.15.0
+          GOLANGCI_LINT_SHA256: 9b7fe6a6bf6334b98decf8d86b11415ea7889afdabdd1959fdce23af2a9ebcea
+        run: |
+          curl -sSfL -o /tmp/golangci-lint.tar.gz "https://github.com/golangci/golangci-lint/releases/download/v${GOLANGCI_LINT_VERSION}/golangci-lint-${GOLANGCI_LINT_VERSION}-linux-amd64.tar.gz"
+          echo "${GOLANGCI_LINT_SHA256}  /tmp/golangci-lint.tar.gz" | sha256sum -c -
+          mkdir -p "$(go env GOPATH)/bin"
+          tar -xzf /tmp/golangci-lint.tar.gz -C "$(go env GOPATH)/bin" --strip-components=1 "golangci-lint-${GOLANGCI_LINT_VERSION}-linux-amd64/golangci-lint"
 
       - name: Test
         # RUN_TIDY_CHECK gates the `go mod tidy` no-op check in run_tests.sh;
         # set it on the highest Go version so the gate runs exactly once per CI
-        # run. SKIP_GO_LINT skips golangci-lint on 1.26: the pinned linter is
-        # built with go1.25 and panics on go1.26 std-lib files, so lint runs on
-        # the 1.25 job instead. Bump the versions below when the matrix changes.
+        # run. SKIP_GO_LINT skips golangci-lint on 1.26: linting does not
+        # depend on the Go version, so it runs once, on the 1.27 job, which is
+        # the version the pinned linter is built with. Bump the versions below
+        # when the matrix changes.
         env:
-          RUN_TIDY_CHECK: ${{ matrix.go == '1.26' && '1' || '' }}
+          RUN_TIDY_CHECK: ${{ matrix.go == '1.27' && '1' || '' }}
           SKIP_GO_LINT: ${{ matrix.go == '1.26' && '1' || '' }}
         run: |
           mkdir -p wallet/appserver/desktop/dist

@@ -129,13 +129,20 @@ resolve_version() {
 	log "version ${VERSION} from ${REF} (${COMMIT:0:10})"
 }
 
-export_source() {
-	# The package scripts share out/<version>/src, so two of them building the
-	# same version at once would clobber each other. The lock is held by this
-	# shell for the rest of the run (release.sh runs the platforms in sequence).
+# lock_version: take the lock on out/<version>, held by this shell for the
+# rest of the run. Whatever writes to that directory, or reads artifacts out
+# of it to send them somewhere, holds it.
+lock_version() {
 	mkdir -p "$OUT_DIR"
 	exec 9>"${OUT_DIR}/.lock"
-	flock -n 9 || die "another build of ${VERSION} is running in ${OUT_DIR}"
+	flock -n 9 || die "another build or upload of ${VERSION} is running in ${OUT_DIR}"
+}
+
+export_source() {
+	# The package scripts share out/<version>/src, so two of them building the
+	# same version at once would clobber each other (release.sh runs the
+	# platforms in sequence).
+	lock_version
 	rm -rf "$SRC_DIR"
 	mkdir -p "$SRC_DIR"
 	if [[ "$DIRTY" == 1 ]]; then
@@ -277,6 +284,37 @@ SECRET_VARS=(APPLE_TEAM_ID APPLE_KEY_FILE APPLE_CERT_FILE APPLE_P12 APPLE_P12_PA
 # run_stage <name> [args...]: re-invoke the calling script inside the builder
 # image. /release is the live scripts directory, /work is out/<version>,
 # /cache persists toolchain caches across runs, /secrets is release/.env.
+#
+# By default a stage receives every SECRET_VARS entry that is set and all of
+# release/.env. A script whose stages should hold less says so before the
+# call, and the setting holds for its later stages until it is changed:
+#   stage_credentials none
+#       no credential variable and no credential file.
+#   stage_credentials only <VAR>... [-- <file>...]
+#       just the named variables, and the named files: paths under
+#       release/.env, which appear at the same paths under /secrets.
+#   stage_private
+#       none of the shared caches and a home directory of its own. Earlier
+#       stages can write to the shared ones, and tools read configuration
+#       from the home directory (curl its .curlrc, jq its .jq).
+#   stage_offline
+#       no network.
+#   stage_workspace [<dir>...]
+#       only the named directories of out/<version>, at /work/<dir>, instead
+#       of all of it at /work. Without arguments, all of it again.
+STAGE_SECRETS=all STAGE_PRIVATE=0 STAGE_OFFLINE=0
+STAGE_SECRET_VARS=() STAGE_SECRET_FILES=() STAGE_WORKSPACE=()
+stage_credentials() {
+	STAGE_SECRETS="$1"; shift
+	STAGE_SECRET_VARS=() STAGE_SECRET_FILES=()
+	while [[ $# -gt 0 && "$1" != -- ]]; do STAGE_SECRET_VARS+=("$1"); shift; done
+	[[ $# -gt 0 ]] && shift
+	STAGE_SECRET_FILES=("$@")
+}
+stage_private() { STAGE_PRIVATE=1; }
+stage_offline() { STAGE_OFFLINE=1; }
+stage_workspace() { STAGE_WORKSPACE=("$@"); }
+
 run_stage() {
 	local stage="$1"; shift
 	local cache="${RELEASE_DIR}/out/.cache"
@@ -284,19 +322,59 @@ run_stage() {
 	local args=(run --rm --init
 		--user "$(id -u):$(id -g)"
 		-e CARIBOU_IN_CONTAINER=1
-		-e HOME=/cache/home -e XDG_CACHE_HOME=/cache/home -e DOTNET_CLI_HOME=/cache/home
-		-e GOMODCACHE=/cache/gomod -e GOCACHE=/cache/gocache
-		-e npm_config_cache=/cache/npm -e ELECTRON_CACHE=/cache/electron
 		-v "${RELEASE_DIR}:/release:ro"
-		-v "${OUT_DIR}:/work"
-		-v "${cache}:/cache"
 		-w /work/src)
-	[[ -d "$ENV_DIR" ]] && args+=(-v "${ENV_DIR}:/secrets:ro")
 	local v
+	if [[ ${#STAGE_WORKSPACE[@]} -gt 0 ]]; then
+		for v in "${STAGE_WORKSPACE[@]}"; do
+			mkdir -p "${OUT_DIR}/${v}"
+			args+=(-v "${OUT_DIR}/${v}:/work/${v}")
+		done
+	else
+		args+=(-v "${OUT_DIR}:/work")
+	fi
+	[[ "$STAGE_OFFLINE" == 1 ]] && args+=(--network none)
+	if [[ "$STAGE_PRIVATE" == 1 ]]; then
+		args+=(--tmpfs /home/stage:mode=1777 -e HOME=/home/stage -e XDG_CACHE_HOME=/home/stage/.cache
+			-e XDG_CONFIG_HOME=/home/stage/.config)
+	else
+		args+=(-e HOME=/cache/home -e XDG_CACHE_HOME=/cache/home -e DOTNET_CLI_HOME=/cache/home
+			-e GOMODCACHE=/cache/gomod -e GOCACHE=/cache/gocache
+			-e npm_config_cache=/cache/npm -e ELECTRON_CACHE=/cache/electron
+			-v "${cache}:/cache")
+	fi
+	local -a secrets=()
+	case "$STAGE_SECRETS" in
+	all)
+		secrets=("${SECRET_VARS[@]}")
+		[[ -d "$ENV_DIR" ]] && args+=(-v "${ENV_DIR}:/secrets:ro")
+		;;
+	none | only)
+		# release/.env sits inside the directory mounted at /release, so it is
+		# covered with an empty filesystem there.
+		[[ -d "$ENV_DIR" && ! -L "$ENV_DIR" ]] && args+=(--tmpfs /release/.env)
+		if [[ "$STAGE_SECRETS" == only ]]; then
+			secrets=("${STAGE_SECRET_VARS[@]+"${STAGE_SECRET_VARS[@]}"}")
+			for v in "${STAGE_SECRET_FILES[@]+"${STAGE_SECRET_FILES[@]}"}"; do
+				[[ -f "${ENV_DIR}/${v}" ]] || die "${v} not found under release/.env"
+				args+=(-v "${ENV_DIR}/${v}:/secrets/${v}:ro")
+			done
+		fi
+		;;
+	*) die "unknown STAGE_SECRETS: ${STAGE_SECRETS}" ;;
+	esac
 	for v in "${CONTAINER_VARS[@]}"; do args+=(-e "${v}=${!v:-}"); done
-	for v in "${SECRET_VARS[@]}"; do [[ -n "${!v:-}" ]] && args+=(-e "${v}=${!v}"); done
+	# A credential is passed by name alone: docker then takes the value from
+	# its own environment, which keeps it out of the docker command line.
+	local -a forward=()
+	for v in "${secrets[@]+"${secrets[@]}"}"; do
+		[[ -n "${!v:-}" ]] && { args+=(-e "$v"); forward+=("$v"); }
+	done
 	[[ -t 0 && -t 1 ]] && args+=(-t)
-	docker "${args[@]}" "$IMAGE" bash "/release/$(basename "$0")" --stage "$stage" "$@"
+	(
+		for v in "${forward[@]+"${forward[@]}"}"; do export "${v?}"; done
+		exec docker "${args[@]}" "$IMAGE" bash "/release/$(basename "$0")" --stage "$stage" "$@"
+	)
 }
 
 # ---------------------------------------------------------------------------

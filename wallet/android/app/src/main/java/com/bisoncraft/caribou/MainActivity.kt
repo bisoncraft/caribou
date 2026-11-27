@@ -33,9 +33,13 @@ import android.widget.LinearLayout
 import android.widget.ProgressBar
 import android.widget.TextView
 import android.widget.Toast
+import androidx.activity.SystemBarStyle
+import androidx.activity.enableEdgeToEdge
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import kotlin.concurrent.thread
@@ -230,6 +234,16 @@ class MainActivity : AppCompatActivity() {
 
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
+        // Android 15 (API 35) lays every app that targets it out edge to edge,
+        // and from API 36 there is no opt-out. Enabling it here on every API
+        // level gives one layout path instead of two; the root view below then
+        // pads itself by the system bar, cutout and keyboard insets. Both bars
+        // are transparent over the root's black background with light icons,
+        // which is how the pre-edge-to-edge theme drew them.
+        enableEdgeToEdge(
+            statusBarStyle = SystemBarStyle.dark(Color.TRANSPARENT),
+            navigationBarStyle = SystemBarStyle.dark(Color.TRANSPARENT),
+        )
         super.onCreate(savedInstanceState)
 
         // Mark the window secure so backgrounded wallet content is excluded from
@@ -278,6 +292,22 @@ class MainActivity : AppCompatActivity() {
         root.addView(webView, FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT)
         lockOverlay = buildLockOverlay().apply { visibility = View.GONE }
         root.addView(lockOverlay, FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT)
+        // Keep the WebView and the lock overlay out from under the status bar,
+        // the navigation bar, any display cutout and the on-screen keyboard.
+        // With edge-to-edge the system no longer resizes the window for the
+        // keyboard, so the ime inset is what keeps a focused field visible.
+        // The insets are consumed here: the WebView sees none, so the SPA's
+        // env(safe-area-inset-*) values stay zero and it does not pad twice.
+        root.setBackgroundColor(Color.BLACK)
+        ViewCompat.setOnApplyWindowInsetsListener(root) { view, insets ->
+            val bars = insets.getInsets(
+                WindowInsetsCompat.Type.systemBars() or
+                    WindowInsetsCompat.Type.displayCutout() or
+                    WindowInsetsCompat.Type.ime(),
+            )
+            view.setPadding(bars.left, bars.top, bars.right, bars.bottom)
+            WindowInsetsCompat.CONSUMED
+        }
         setContentView(root)
 
         // Start the core off the main thread; wallet boot can be slow. The
@@ -348,17 +378,12 @@ class MainActivity : AppCompatActivity() {
 
     // scheduleEviction arms the key-eviction alarm for triggerAtElapsed (an
     // elapsedRealtime deadline, matching backgroundedAt). setAndAllowWhileIdle lets
-    // it fire even while the device is dozing, unlike a Handler; below API 23
-    // (pre-Doze) a plain set suffices. The onStart backstop still re-checks on
-    // resume in case the OS coalesced or deferred the alarm.
+    // it fire even while the device is dozing, unlike a Handler. The onStart
+    // backstop still re-checks on resume in case the OS coalesced or deferred
+    // the alarm.
     private fun scheduleEviction(triggerAtElapsed: Long) {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            alarmManager.setAndAllowWhileIdle(
-                AlarmManager.ELAPSED_REALTIME_WAKEUP, triggerAtElapsed, evictPendingIntent)
-        } else {
-            alarmManager.set(
-                AlarmManager.ELAPSED_REALTIME_WAKEUP, triggerAtElapsed, evictPendingIntent)
-        }
+        alarmManager.setAndAllowWhileIdle(
+            AlarmManager.ELAPSED_REALTIME_WAKEUP, triggerAtElapsed, evictPendingIntent)
     }
 
     // onStart fires when the app becomes visible again. Cancel the pending
@@ -825,10 +850,6 @@ private class LoopbackWebViewClient(private val onLoaded: () -> Unit) : WebViewC
 
     override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean =
         !isLoopback(request.url)
-
-    @Deprecated("Used on API < 24, where the WebResourceRequest overload is unavailable")
-    override fun shouldOverrideUrlLoading(view: WebView, url: String): Boolean =
-        !isLoopback(Uri.parse(url))
 
     // isLoopback reports whether uri targets the in-process appserver: plaintext
     // http to 127.0.0.1 or localhost. Returning false from shouldOverrideUrlLoading

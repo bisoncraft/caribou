@@ -6,9 +6,13 @@
 #
 # Prereqs:
 #   - Xcode + command line tools.
-#   - gomobile + gobind on PATH:  go install golang.org/x/mobile/cmd/gomobile@latest
-#                                 go install golang.org/x/mobile/cmd/gobind@latest
-#                                 gomobile init
+# gomobile and gobind need no install: they are built from go.mod (see below).
+#
+# Environment:
+#   CARIBOU_XMR=1             include Monero (see below)
+#   CARIBOU_SKIP_WEB_BUILD=1  do not rebuild the web bundle first
+#   CARIBOU_GO_LDFLAGS        extra Go linker flags; the release scripts use it
+#                             to stamp the version
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -148,12 +152,22 @@ PLIST
     echo "XMR enabled: assembled Monero.xcframework (device + simulator)." >&2
 fi
 
+# gomobile and gobind are built from the versions the tool directives in go.mod
+# pin, so a bind never depends on whatever happens to be installed. gomobile
+# runs gobind from PATH, so both go into a scratch directory placed first on it.
+tooldir="$(mktemp -d)"
+trap 'rm -rf "$tooldir"' EXIT
+go build -o "$tooldir/" golang.org/x/mobile/cmd/gomobile golang.org/x/mobile/cmd/gobind
+PATH="$tooldir:$PATH"
+
 # Device (ios) + Simulator (iossimulator) so the dev loop works on both real
 # devices and the Simulator; gomobile packs the slices into one .xcframework.
 # arm64 covers modern devices and Apple-silicon simulators.
 gomobile bind \
     -target=ios,iossimulator \
+    -trimpath \
     -tags "$tags" \
+    ${CARIBOU_GO_LDFLAGS:+-ldflags="$CARIBOU_GO_LDFLAGS"} \
     -o "$out" \
     ./wallet/mobile
 

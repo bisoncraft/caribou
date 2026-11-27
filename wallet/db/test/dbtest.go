@@ -103,7 +103,7 @@ func MustCompareWallets(t testKiller, w1, w2 *db.Wallet) {
 		t.Fatalf("Type mismatch. %s != %s", w1.Type, w2.Type)
 	}
 	if len(w1.Settings) != len(w2.Settings) {
-		t.Fatalf("Settings mismatch. %d != %s", len(w1.Settings), len(w2.Settings))
+		t.Fatalf("Settings mismatch. %d != %d", len(w1.Settings), len(w2.Settings))
 	}
 	w2Settings := make(map[string]string, len(w2.Settings))
 	for k, v := range w2.Settings {

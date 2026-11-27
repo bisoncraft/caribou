@@ -187,4 +187,93 @@ RUN apt-get update && apt-get install -y --no-install-recommends python3-venv \
 FROM tools
 COPY --from=osxcross /opt/osxcross /opt/osxcross
 ENV PATH=/opt/osxcross/bin:${PATH} LD_LIBRARY_PATH=/opt/osxcross/lib
+
+# Android toolchain for release/package-android.sh: a JDK for Gradle and
+# gomobile, the SDK platform and build tools that wallet/android/app/build.gradle
+# names, platform-tools, which the Gradle plugin otherwise tries to download on
+# every build, the NDK gomobile compiles the Go library with, and bundletool. These
+# are the last layers of the final stage, so changing them rebuilds nothing
+# else. The versions here and in build.gradle (compileSdk, buildToolsVersion)
+# move together.
+#
+# The JDK lives outside PATH: the distro's JRE, which jsign runs on, stays the
+# default java, and package-android.sh selects this one through JAVA_HOME.
+ARG TEMURIN_RELEASE=jdk-25.0.5.1%2B2
+ARG TEMURIN_FILE=OpenJDK25U-jdk_x64_linux_hotspot_25.0.5.1_2.tar.gz
+ARG TEMURIN_SHA256=760f91b22c3efc9bd1b64ff950598231be82928cc807e30691a0e7a2995a62c0
+RUN curl -fsSL "https://github.com/adoptium/temurin25-binaries/releases/download/${TEMURIN_RELEASE}/${TEMURIN_FILE}" -o /tmp/jdk.tgz \
+    && echo "${TEMURIN_SHA256}  /tmp/jdk.tgz" | sha256sum -c - \
+    && mkdir -p /opt/android-jdk && tar -xzf /tmp/jdk.tgz -C /opt/android-jdk --strip-components=1 && rm /tmp/jdk.tgz \
+    && /opt/android-jdk/bin/java -version
+
+# The SDK is laid out by hand from Google's archives so that each one can be
+# pinned by checksum, which sdkmanager's own downloads cannot be. Two things
+# sdkmanager would otherwise have done are done here:
+#   - licenses/android-sdk-license holds the hash of the SDK license text,
+#     which is how the Android Gradle plugin records its acceptance;
+#   - each package gets the package.xml the plugin identifies it by. Without
+#     one it does not recognize the API 37 platform and tries to download it
+#     into the SDK directory, which is read-only for the build user, and it
+#     re-parses the others as "legacy" packages on every build. The values
+#     come from each archive's own source.properties.
+ARG ANDROID_PLATFORM=android-37.0
+ARG ANDROID_PLATFORM_ZIP=platform-37.0_r02.zip
+ARG ANDROID_PLATFORM_SHA256=840b23e827f96e64aea4c89a1194aac3dc5f6bad37edb231c5c795d890330e8d
+ARG ANDROID_BUILD_TOOLS=37.0.0
+ARG ANDROID_BUILD_TOOLS_ZIP=build-tools_r37_linux.zip
+ARG ANDROID_BUILD_TOOLS_SHA256=01af179347cbcd9c208b7f8171f7b21f6dd1d2f85bcd15e88caa51d5d7b86060
+ARG ANDROID_PLATFORM_TOOLS_ZIP=platform-tools_r37.0.3-linux.zip
+ARG ANDROID_PLATFORM_TOOLS_SHA256=214548146cadb2ca3508143d8a1d4be4c59de5bb837253e3ede89ed74cf450d1
+ARG ANDROID_NDK=30.0.16248370
+ARG ANDROID_NDK_ZIP=android-ndk-r30-linux.zip
+ARG ANDROID_NDK_SHA256=753611f410d002cfcd3f3dc2ef49aad532089d3180b436c060a90bf0fcb64df2
+ARG ANDROID_SDK_LICENSE_HASH=24333f8a63b6825ea9c5514f83c2829b004d1fee
+ENV ANDROID_HOME=/opt/android-sdk ANDROID_NDK_HOME=/opt/android-sdk/ndk/${ANDROID_NDK}
+RUN set -eu; \
+    repo=https://dl.google.com/android/repository; \
+    fetch() { curl -fsSL "$repo/$1" -o "/tmp/$1" && echo "$2  /tmp/$1" | sha256sum -c -; }; \
+    # unpack <zip> <destination>: every archive holds a single top-level \
+    # directory, whose name is not the one the SDK layout wants. \
+    unpack() { rm -rf /tmp/unz && mkdir -p /tmp/unz "$(dirname "$2")" && unzip -q "/tmp/$1" -d /tmp/unz \
+        && [ "$(ls /tmp/unz | wc -l)" = 1 ] && mv /tmp/unz/* "$2" && rm -rf /tmp/unz "/tmp/$1"; }; \
+    prop() { sed -n "s/^$2 *= *//p" "$1/source.properties" | tr -d '\r'; }; \
+    # generic_xml <dir> <package path> <display name>: package.xml for a \
+    # package with no type-specific details, its revision read from <dir>. \
+    generic_xml() { rev="$(prop "$1" Pkg.Revision)"; rest="${rev#*.}"; \
+        printf '%s<localPackage path="%s" obsolete="false"><type-details xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:type="ns5:genericDetailsType"/><revision><major>%s</major><minor>%s</minor><micro>%s</micro></revision><display-name>%s</display-name><uses-license ref="android-sdk-license"/></localPackage></ns2:repository>\n' \
+        "$header" "$2" "${rev%%.*}" "${rest%%.*}" "${rest#*.}" "$3" >"$1/package.xml"; }; \
+    header='<?xml version="1.0" encoding="UTF-8"?><ns2:repository xmlns:ns2="http://schemas.android.com/repository/android/common/02" xmlns:ns5="http://schemas.android.com/repository/android/generic/02" xmlns:ns6="http://schemas.android.com/sdk/android/repo/repository2/04"><license id="android-sdk-license" type="text">Android Software Development Kit License Agreement, https://developer.android.com/studio/terms</license>'; \
+    fetch "${ANDROID_PLATFORM_ZIP}" "${ANDROID_PLATFORM_SHA256}"; \
+    fetch "${ANDROID_BUILD_TOOLS_ZIP}" "${ANDROID_BUILD_TOOLS_SHA256}"; \
+    fetch "${ANDROID_PLATFORM_TOOLS_ZIP}" "${ANDROID_PLATFORM_TOOLS_SHA256}"; \
+    fetch "${ANDROID_NDK_ZIP}" "${ANDROID_NDK_SHA256}"; \
+    plat="${ANDROID_HOME}/platforms/${ANDROID_PLATFORM}"; \
+    bt="${ANDROID_HOME}/build-tools/${ANDROID_BUILD_TOOLS}"; \
+    unpack "${ANDROID_PLATFORM_ZIP}" "$plat"; \
+    unpack "${ANDROID_BUILD_TOOLS_ZIP}" "$bt"; \
+    unpack "${ANDROID_PLATFORM_TOOLS_ZIP}" "${ANDROID_HOME}/platform-tools"; \
+    unpack "${ANDROID_NDK_ZIP}" "${ANDROID_NDK_HOME}"; \
+    [ "$(prop "$bt" Pkg.Revision)" = "${ANDROID_BUILD_TOOLS}" ]; \
+    [ "$(prop "${ANDROID_NDK_HOME}" Pkg.Revision)" = "${ANDROID_NDK}" ]; \
+    printf '%s<localPackage path="platforms;%s" obsolete="false"><type-details xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:type="ns6:platformDetailsType"><api-level>%s</api-level><codename></codename><extension-level>%s</extension-level><base-extension>true</base-extension><layoutlib api="%s"/></type-details><revision><major>%s</major></revision><display-name>Android SDK Platform %s</display-name><uses-license ref="android-sdk-license"/></localPackage></ns2:repository>\n' \
+        "$header" "${ANDROID_PLATFORM}" "$(prop "$plat" AndroidVersion.ApiLevel)" "$(prop "$plat" AndroidVersion.ExtensionLevel)" \
+        "$(prop "$plat" Layoutlib.Api)" "$(prop "$plat" Pkg.Revision)" "$(prop "$plat" AndroidVersion.ApiLevel)" >"$plat/package.xml"; \
+    generic_xml "$bt" "build-tools;${ANDROID_BUILD_TOOLS}" "Android SDK Build-Tools ${ANDROID_BUILD_TOOLS}"; \
+    generic_xml "${ANDROID_HOME}/platform-tools" platform-tools "Android SDK Platform-Tools"; \
+    generic_xml "${ANDROID_NDK_HOME}" "ndk;${ANDROID_NDK}" "NDK (Side by side) ${ANDROID_NDK}"; \
+    mkdir -p "${ANDROID_HOME}/licenses"; \
+    printf '\n%s\n' "${ANDROID_SDK_LICENSE_HASH}" >"${ANDROID_HOME}/licenses/android-sdk-license"; \
+    "$bt/aapt2" version; "$bt/zipalign" 2>&1 | head -1; \
+    "${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/clang" --version | head -1
+
+# bundletool validates the Android App Bundle that goes to Google Play. Its
+# bundled protobuf uses sun.misc.Unsafe, which this JDK warns about on every
+# run unless told the access is expected.
+ARG BUNDLETOOL_VERSION=1.18.3
+ARG BUNDLETOOL_SHA256=a099cfa1543f55593bc2ed16a70a7c67fe54b1747bb7301f37fdfd6d91028e29
+RUN curl -fsSL "https://github.com/google/bundletool/releases/download/${BUNDLETOOL_VERSION}/bundletool-all-${BUNDLETOOL_VERSION}.jar" -o /usr/local/lib/bundletool.jar \
+    && echo "${BUNDLETOOL_SHA256}  /usr/local/lib/bundletool.jar" | sha256sum -c - \
+    && printf '#!/bin/sh\nexec /opt/android-jdk/bin/java --sun-misc-unsafe-memory-access=allow -jar /usr/local/lib/bundletool.jar "$@"\n' >/usr/local/bin/bundletool \
+    && chmod 755 /usr/local/bin/bundletool
+
 WORKDIR /work

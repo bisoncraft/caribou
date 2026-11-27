@@ -25,7 +25,7 @@
     <string name="unlock_prompt_title">Unlock Caribou</string>
 
     <!-- UI-gate lock overlay. -->
-    <string name="lock_overlay_title">Caribou</string>
+    <string name="lock_overlay_title" translatable="false">Caribou</string>
     <string name="lock_overlay_locked">Locked</string>
     <string name="lock_overlay_unlocking">Unlocking…</string>
     <string name="lock_overlay_unlock">Unlock</string>
