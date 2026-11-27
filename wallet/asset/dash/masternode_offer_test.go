@@ -56,9 +56,6 @@ type fakeFunding struct {
 	// refuseStored makes PublishBisonTx drop the transaction, as a wallet whose
 	// backend refuses one it already has.
 	refuseStored bool
-	// confirmedOnSend makes PublishBisonTx drop the transaction and succeed, as
-	// the wallet does when the backend says it is already in a block.
-	confirmedOnSend bool
 	// mined gives the published transactions a block.
 	mined bool
 }
@@ -189,10 +186,6 @@ func (f *fakeFunding) PrivKeyForAddress(a btcutil.Address) (*btcec.PrivateKey, e
 	return k, nil
 }
 func (f *fakeFunding) PublishBisonTx(tx *bisonwire.Tx, _ string) error {
-	if f.confirmedOnSend {
-		f.published = slices.DeleteFunc(f.published, func(p *bisonwire.Tx) bool { return p.TxHash() == tx.TxHash() })
-		return nil
-	}
 	if f.refuseStored {
 		f.published = slices.DeleteFunc(f.published, func(p *bisonwire.Tx) bool { return p.TxHash() == tx.TxHash() })
 		return errors.New("missing inputs")
@@ -925,11 +918,6 @@ func TestRegistrationGone(t *testing.T) {
 	f.refuseStored = true
 	if err := registrationGone(f, tx.TxHash()); err != nil {
 		t.Fatalf("a registration the backend refuses: %v", err)
-	}
-	f = published()
-	f.confirmedOnSend = true
-	if err := registrationGone(f, tx.TxHash()); err == nil {
-		t.Fatal("a registration the backend has in a block is gone")
 	}
 	f = published()
 	f.mined = true

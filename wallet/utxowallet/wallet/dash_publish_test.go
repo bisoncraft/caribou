@@ -310,3 +310,36 @@ func TestResendUnminedTxsKeepsTxWhenBackendUnavailable(t *testing.T) {
 		t.Fatal("resend deleted a tx the backend was only unreachable for")
 	}
 }
+
+// TestPublishBisonTxKeepsTxTheBackendHasWhenAsked guards a transaction whose
+// owner has to see it until the wallet has its block: when the backend says it
+// is already in a block the wallet keeps its record, where it drops it for any
+// other transaction, so the owner is not told it is gone while it is mined.
+func TestPublishBisonTxKeepsTxTheBackendHasWhenAsked(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		keep func(*bisonwire.Tx) bool
+		want bool
+	}{
+		{"not asked", nil, false},
+		{"asked", func(*bisonwire.Tx) bool { return true }, true},
+		{"asked for another", func(*bisonwire.Tx) bool { return false }, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := &publishRecorder{mockChainClient: &mockChainClient{}}
+			w := testDashWallet(t, rec)
+			w.KeepUnminedOnConfirmed(tc.keep)
+			tx := decodeDashSpecialTx(t)
+			if err := w.PublishBisonTx(tx, ""); err != nil {
+				t.Fatalf("PublishBisonTx: %v", err)
+			}
+			rec.err = chain.ErrTxAlreadyConfirmed
+			if err := w.PublishBisonTx(tx, ""); err != nil {
+				t.Fatalf("republish: %v", err)
+			}
+			if got := storedTx(t, w, tx.TxHash()) != nil; got != tc.want {
+				t.Fatalf("stored = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}

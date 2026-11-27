@@ -55,6 +55,8 @@ const (
 	minFundingConf = 1
 	// registrationLabel labels the broadcast transaction.
 	registrationLabel = "shared masternode registration"
+	// proRegTxType is the type of a provider registration transaction.
+	proRegTxType = 1
 )
 
 // fundingWallet is the part of the utxo wallet that offers use.
@@ -434,9 +436,8 @@ func (dw *dashWallet) CancelMasternodeOffer(ctx context.Context, offerID string)
 // transaction only when its own publish is refused, not when another
 // participant spends their input, so one still stored is sent to the backend
 // again: the wallet drops it if the backend refuses it, and it is still
-// pending if the backend takes it. The wallet also drops it, with no error,
-// when the backend says it is already in a block, which means it is mined and
-// the wallet has not seen the block yet.
+// pending if the backend takes it. One the backend says is already in a block
+// stays stored, as a pending one, until the wallet has the block.
 func registrationGone(fw fundingWallet, h chainhash.Hash) error {
 	txid := h.String()
 	res, err := fw.GetTransaction(h)
@@ -454,13 +455,10 @@ func registrationGone(fw fundingWallet, h chainhash.Hash) error {
 		return err
 	}
 	// A refusal is how a registration that can never mine is found out: the
-	// wallet drops it, and the lookup below says so. A drop without a refusal
-	// means the backend has it in a block.
+	// wallet drops it, and the lookup below says so.
 	pubErr := fw.PublishBisonTx(tx, registrationLabel)
 	_, err = fw.GetTransaction(h)
 	switch {
-	case errors.Is(err, wallet.ErrNoTx) && pubErr == nil:
-		return fmt.Errorf("the registration %s is mined: the backend has it in a block the wallet has not seen yet", txid)
 	case errors.Is(err, wallet.ErrNoTx):
 		return nil
 	case err != nil:
@@ -468,7 +466,7 @@ func registrationGone(fw fundingWallet, h chainhash.Hash) error {
 	case pubErr != nil:
 		return fmt.Errorf("the registration %s is pending: it was broadcast and the wallet still has it, but the backend did not refuse it: %w", txid, pubErr)
 	}
-	return fmt.Errorf("the registration %s is pending: it was broadcast, the wallet still has it and the backend accepted it again", txid)
+	return fmt.Errorf("the registration %s is pending: it was broadcast, the wallet still has it and the backend accepted it or already has it", txid)
 }
 
 // usableOffer loads an offer that can still review and sign.

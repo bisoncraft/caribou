@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/bisoncraft/caribou/wallet/asset/dash/masternode"
+	"github.com/bisoncraft/caribou/wallet/utxowallet/bisonwire"
 	"github.com/bisoncraft/caribou/wallet/utxowallet/wallet"
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
 )
@@ -200,6 +201,9 @@ func startFeed(src txSource) *feed {
 // the synchronization records transactions that are below the height a restart
 // reads from, and only a subscription that is already there is told of them.
 func (dw *dashWallet) onOpen(w *wallet.Wallet) {
+	// A registration the backend has in a block the wallet has not seen yet
+	// stays in the wallet, so a cancel still finds it and refuses.
+	w.KeepUnminedOnConfirmed(func(tx *bisonwire.Tx) bool { return tx.Type == proRegTxType })
 	dw.dropEarlyFeed()
 	dw.early.Store(startFeed(walletSource{w}))
 }

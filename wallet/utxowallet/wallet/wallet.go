@@ -137,6 +137,11 @@ type Wallet struct {
 	// see watch_policy.go. The zero value is ready to use.
 	watchPol watchPolicy
 
+	// keepOnConfirmed, when set, names the transactions that stay stored
+	// when the backend says they are already known or in a block. It is set
+	// before the wallet synchronizes and not changed after.
+	keepOnConfirmed func(*bisonwire.Tx) bool
+
 	chainClient        chain.Backend
 	chainClientLock    sync.Mutex
 	chainClientSynced  bool
@@ -3989,6 +3994,14 @@ func (w *Wallet) PublishTransaction(tx *wire.MsgTx, label string) error {
 	return err
 }
 
+// KeepUnminedOnConfirmed sets which transactions the wallet keeps stored when
+// the backend says it already has them. By default it removes them, trusting
+// the next block to record them; a caller that needs to see a transaction
+// until the wallet has its block names it here. Call it before Synchronize.
+func (w *Wallet) KeepUnminedOnConfirmed(keep func(*bisonwire.Tx) bool) {
+	w.keepOnConfirmed = keep
+}
+
 // PublishBisonTx is PublishTransaction for a chain-aware transaction. Use it
 // for a Dash special transaction, whose type and extra payload a wire.MsgTx
 // cannot carry.
@@ -4132,6 +4145,11 @@ func (w *Wallet) publishTransaction(tx *bisonwire.Tx, stored bool) (*chainhash.H
 
 	case errors.Is(rpcErr, chain.ErrTxAlreadyKnown),
 		errors.Is(rpcErr, chain.ErrTxAlreadyConfirmed):
+
+		if w.keepOnConfirmed != nil && w.keepOnConfirmed(tx) {
+			log.Infof("%v: backend already has tx, keeping it stored", txid)
+			return &txid, nil
+		}
 
 		dbErr := w.removeUnminedTx(tx)
 		if dbErr != nil {
