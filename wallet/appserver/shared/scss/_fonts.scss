@@ -1,0 +1,20 @@
+// _fonts.scss: the UI typefaces shared by the desktop and mobile bundles.
+// Inter for UI text; "mono" (Inconsolata) for amounts, addresses and IDs.
+
+@font-face {
+  font-family: 'inter';
+  src:
+    url('/font/Inter-variable.woff2') format('woff2-variations'),
+    url('/font/Inter-variable.woff2') format('woff2');
+  font-weight: 400 600;
+  font-style: normal;
+}
+
+@font-face {
+  font-family: "mono";
+  src:
+    url("/font/inconsolata-v15-latin-regular.woff2") format("woff2-variations"),
+    url("/font/inconsolata-v15-latin-regular.woff2") format('woff2');
+  font-weight: normal;
+  font-style: normal;
+}

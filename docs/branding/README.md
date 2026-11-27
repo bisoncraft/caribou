@@ -54,7 +54,7 @@ after changing it.
 ### Web UI: `wallet/appserver/desktop/`
 
 The desktop UI already uses the antlers. `shared/img/favicon-brown.png` and
-`favicon-blue.png` follow the theme (`desktop/src/theme.ts`), and `img.logo-full`
+`favicon-blue.png` follow the theme (`shared/src/theme.ts`), and `img.logo-full`
 renders `shared/img/logo-antlers-brown.png` or `logo-antlers-blue.png`
 (`desktop/src/scss/components.scss`).
 

@@ -1,6 +1,6 @@
-import State from '@caribou/shared/state'
+import State from './state'
 
-// The color themes defined in scss/vars.scss. Each palette is keyed off the
+// The color themes defined in shared/scss/_themes.scss. Each palette is keyed off the
 // data-theme attribute on body; warm is also the no-attribute default.
 export const themes = ['warm', 'cool', 'light'] as const
 export type Theme = typeof themes[number]
