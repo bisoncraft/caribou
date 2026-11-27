@@ -79,7 +79,7 @@ func TestFillObserversSkipsCurrentWallet(t *testing.T) {
 	n := newUnstartedNetwork(t, f, params)
 
 	// Make the fake the CURRENT wallet server.
-	node, err := NewNode(n.ctx, f.addr(), "", params.GenesisHash.String())
+	node, err := NewNode(n.ctx, f.addr(), "", params.GenesisHash.String(), bisonwire.ChainBTC)
 	if err != nil {
 		t.Fatalf("NewNode: %v", err)
 	}
@@ -159,7 +159,7 @@ func TestAttachNodePurgesSelfObserver(t *testing.T) {
 	n := newUnstartedNetwork(t, f, params)
 
 	// The racing observer: a live second connection to the same address.
-	obsNode, err := NewNode(n.ctx, f.addr(), "", params.GenesisHash.String())
+	obsNode, err := NewNode(n.ctx, f.addr(), "", params.GenesisHash.String(), bisonwire.ChainBTC)
 	if err != nil {
 		t.Fatalf("NewNode(observer): %v", err)
 	}
@@ -168,7 +168,7 @@ func TestAttachNodePurgesSelfObserver(t *testing.T) {
 	n.observers[f.addr().Addr] = o
 	n.obsMtx.Unlock()
 
-	node, err := NewNode(n.ctx, f.addr(), "", params.GenesisHash.String())
+	node, err := NewNode(n.ctx, f.addr(), "", params.GenesisHash.String(), bisonwire.ChainBTC)
 	if err != nil {
 		t.Fatalf("NewNode(successor): %v", err)
 	}
