@@ -191,7 +191,7 @@ func TestNewWallet(t *testing.T) {
 	if err != nil {
 		t.Fatalf("newWallet(electrum) errored: %v", err)
 	}
-	if nw, ok := w.(*btc.NativeWallet); !ok || nw == nil {
+	if nw, ok := w.(*dashWallet); !ok || nw == nil || nw.NativeWallet == nil {
 		t.Fatal("newWallet(electrum) returned a nil wallet")
 	}
 
@@ -216,7 +216,7 @@ func TestDriverOpen(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open errored: %v", err)
 	}
-	if nw, ok := w.(*btc.NativeWallet); !ok || nw == nil {
+	if nw, ok := w.(*dashWallet); !ok || nw == nil || nw.NativeWallet == nil {
 		t.Fatal("Open returned a nil wallet")
 	}
 

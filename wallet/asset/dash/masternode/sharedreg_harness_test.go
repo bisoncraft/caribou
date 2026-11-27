@@ -27,7 +27,8 @@ import (
 
 // harnessProposal makes a two-share registration funded by outputs wallet
 // gamma sends to itself for it, with owner keys held by the test.
-func harnessProposal(t *testing.T) (*Proposal, []Own, []*btcec.PrivateKey) {
+// fixed, if given, are the owner keys of the shares in place of random ones.
+func harnessProposal(t *testing.T, fixed ...*btcec.PrivateKey) (*Proposal, []Own, []*btcec.PrivateKey) {
 	t.Helper()
 	if _, err := rpc(t, "walletpassphrase", "abc", 600); err != nil {
 		t.Logf("walletpassphrase: %v", err)
@@ -97,9 +98,14 @@ func harnessProposal(t *testing.T) (*Proposal, []Own, []*btcec.PrivateKey) {
 	var ownerKeys []*btcec.PrivateKey
 	var owns []Own
 	for i, amt := range amounts {
-		key, err := btcec.NewPrivateKey()
-		if err != nil {
-			t.Fatal(err)
+		var key *btcec.PrivateKey
+		if i < len(fixed) {
+			key = fixed[i]
+		} else {
+			var err error
+			if key, err = btcec.NewPrivateKey(); err != nil {
+				t.Fatal(err)
+			}
 		}
 		ownerKeys = append(ownerKeys, key)
 		_, refund, _ := addr(t)
