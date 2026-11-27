@@ -16,75 +16,62 @@ import (
 	"bytes"
 	"encoding/hex"
 	"encoding/json"
-	"math"
-	"sort"
 	"testing"
 
 	"github.com/btcsuite/btcd/btcec/v2"
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
-	"github.com/btcsuite/btcd/wire"
 
 	"github.com/bisoncraft/caribou/wallet/asset/dash/protx"
 	"github.com/bisoncraft/caribou/wallet/utxowallet/bisonwire"
 )
 
-// harnessProposal makes a two-share registration funded by wallet gamma's
-// outputs, with owner keys held by the test.
+// harnessProposal makes a two-share registration funded by outputs wallet
+// gamma sends to itself for it, with owner keys held by the test.
 func harnessProposal(t *testing.T) (*Proposal, []Own, []*btcec.PrivateKey) {
 	t.Helper()
 	if _, err := rpc(t, "walletpassphrase", "abc", 600); err != nil {
 		t.Logf("walletpassphrase: %v", err)
 	}
-	r, err := rpc(t, "listunspent")
-	if err != nil {
-		t.Fatal(err)
-	}
-	var utxos []struct {
-		TxID         string  `json:"txid"`
-		Vout         uint32  `json:"vout"`
-		Amount       float64 `json:"amount"`
-		ScriptPubKey string  `json:"scriptPubKey"`
-		Spendable    bool    `json:"spendable"`
-	}
-	if err := json.Unmarshal(r, &utxos); err != nil {
-		t.Fatal(err)
-	}
-	sort.Slice(utxos, func(i, j int) bool { return utxos[i].Amount > utxos[j].Amount })
-
-	// Two shares of 500 DASH, each funded by whole outputs of the wallet.
+	// Two shares of 500 DASH, each funded by one output made for it, so that
+	// the test does not depend on how the wallet's coins happen to be split.
 	const fee = 20_000
 	amounts := []int64{500e8, 500e8}
 	var funding []Funding
-	next := 0
-	for i, amt := range amounts {
-		var f Funding
-		var have int64
-		for next < len(utxos) && have < amt+fee {
-			u := utxos[next]
-			next++
-			if !u.Spendable {
-				continue
-			}
-			h, err := chainhash.NewHashFromStr(u.TxID)
-			if err != nil {
-				t.Fatal(err)
-			}
-			script, err := hex.DecodeString(u.ScriptPubKey)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if len(script) != 25 { // P2PKH only
-				continue
-			}
-			v := int64(math.Round(u.Amount * 1e8))
-			f.Inputs = append(f.Inputs, FundingInput{OutPoint: wire.OutPoint{Hash: *h, Index: u.Vout}, PkScript: script, Value: v})
-			have += v
-		}
-		if have < amt+fee {
-			t.Skipf("wallet gamma cannot fund share %d", i)
-		}
-		_, f.ChangeScript, _ = addr(t)
+	for _, amt := range amounts {
+		a, script, _ := addr(t)
+		sent := rpcStr(t, "sendtoaddress", a, float64(amt+fee)/1e8)
+		f := Funding{Inputs: []FundingInput{{PkScript: script, Value: amt + fee}}}
+		f.Inputs[0].OutPoint.Hash = *mustHash(t, sent)
 		funding = append(funding, f)
+	}
+	mine(t, 1)
+	for i := range funding {
+		in := &funding[i].Inputs[0]
+		info, err := rpc(t, "getrawtransaction", in.OutPoint.Hash.String(), true)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var tx struct {
+			Vout []struct {
+				N            uint32 `json:"n"`
+				ScriptPubKey struct {
+					Hex string `json:"hex"`
+				} `json:"scriptPubKey"`
+			} `json:"vout"`
+		}
+		if err := json.Unmarshal(info, &tx); err != nil {
+			t.Fatal(err)
+		}
+		found := false
+		for _, o := range tx.Vout {
+			if o.ScriptPubKey.Hex == hex.EncodeToString(in.PkScript) {
+				in.OutPoint.Index, found = o.N, true
+			}
+		}
+		if !found {
+			t.Fatalf("%s pays nothing to share %d's funding script", in.OutPoint.Hash, i)
+		}
+		_, funding[i].ChangeScript, _ = addr(t)
 	}
 
 	opJSON, err := rpc(t, "bls", "generate")
@@ -219,4 +206,13 @@ func TestRegistrationAcceptedByDashCore(t *testing.T) {
 	if err := back.Deserialize(bytes.NewReader(raw)); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func mustHash(t *testing.T, s string) *chainhash.Hash {
+	t.Helper()
+	h, err := chainhash.NewHashFromStr(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return h
 }

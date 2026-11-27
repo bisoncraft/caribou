@@ -51,8 +51,10 @@ func badDis(format string, args ...any) error {
 }
 
 // SharedMN is the on-chain state of a shared masternode that a dissolution is
-// built from. Only the amount, refund script and owner key id of each share are
-// used.
+// built from. A dissolution uses only the amount, refund script and owner key
+// id of each share. An update (ShareUpdate, RegistrarUpdate) also uses the
+// current reward scripts, so Shares must hold them, and the voting key and
+// operator key as they are now.
 type SharedMN struct {
 	ProTxHash         chainhash.Hash
 	Collateral        wire.OutPoint
@@ -60,6 +62,8 @@ type SharedMN struct {
 	RegisteredHeight  int32
 	EarlyPeriodBlocks uint32
 	EarlyPenalty      int64
+	PubKeyOperator    [protx.OperatorPubKeySize]byte
+	KeyIDVoting       [protx.KeyIDSize]byte
 }
 
 // early reports whether a transaction mined at spendHeight is in the early
