@@ -35,8 +35,16 @@ the tag being built before they are linked.
 3. The script re-runs itself inside the `caribou-builder` Docker image with
    `release/` mounted read-only, `release/out/<version>` as the work
    directory, and `release/.env` mounted read-only as `/secrets`.
+   Credentials set in `env.sh` are passed to the container by name, so their
+   values do not appear in the `docker` command line.
 4. Inside the image: web UI build, Go build, signing, packaging. Outputs land
    in `release/out/<version>/<os>/`.
+
+Only the Android scripts narrow step 3: `package-android.sh` builds in one
+container with no credentials and signs in a second one, and
+`publish-play.sh` gets the Google Play key alone (see the Android notes
+below). The desktop and command-line scripts build and sign in one
+container, which holds every credential in `release/.env`.
 
 Toolchain caches (Go, npm, Electron, dotnet, Gradle) persist in
 `release/out/.cache` across runs. `release/out` and `release/.env` are gitignored.
@@ -195,13 +203,36 @@ it was built with:
 - `caribou-<version>.aab`, the Android App Bundle for Google Play, signed
   with the upload key. It stays in `out/<version>/android/`.
 
-Gradle emits both unsigned and the script signs them, so the keystore
-passwords never reach Gradle. After signing, the script checks each signer
-against its pin, the package name, version name and version code, that every
-native library is stored page-aligned with 16 KB segment alignment (required
-on Android 15 devices with 16 KB pages and by Google Play), that the XMR
-library in the APK is byte for byte the verified one, and that bundletool
-accepts the bundle.
+The work runs in two containers, so that nothing fetched from the network
+runs next to a signing key. The first builds: npm, gomobile, Gradle and
+everything they resolve run there, with no credential variable, with
+`release/.env` hidden, and with write access under `out/<version>` only to
+the exported source and to its own output directory. Gradle emits both
+artifacts unsigned. The second
+signs and checks them. It receives the two keystores and their passwords and
+nothing else, has no network, no access to the shared caches and a home
+directory of its own, and runs only tools that are part of the builder
+image.
+
+After signing, the second container checks, for the APK and the bundle
+alike: the signer against its pin; the package name, version name and
+version code; that the native libraries are the expected ones for arm64
+only, each linked with 16 KB segment alignment; and that the XMR library and
+its `libc++_shared.so` have the checksums the host recorded before the build
+started. The APK must also be zip-aligned to 16 KB, and the bundle must pass
+`bundletool validate` and ask, in its configuration, for uncompressed native
+libraries aligned to 16 KB, since Google Play generates the APKs it serves
+from that setting. Android 15 devices with 16 KB pages, and Google Play,
+refuse anything less.
+
+`out/<version>/android/` is created by the second container, in one step
+and only when every check has passed, holding the two artifacts and a
+`SHA256SUMS` of them. The first container cannot write there, and a run
+that fails leaves no such directory. `release.sh` copies the APK, and
+`publish-play.sh` uploads the bundle, by the exact name that script gives
+it and only when `SHA256SUMS` lists it and still matches.
+`release.sh --skip-android` leaves an APK from an earlier run out of
+`dist/`.
 
 `versionName` is the tag's version. `versionCode` is the number of commits in
 the history of the commit being built, the build number `package-ios.sh` gives
@@ -215,6 +246,10 @@ and creates a draft release on the internal testing track; `--rollout` makes
 it available to the track's testers at once, `--track alpha` or `beta`
 selects closed or open testing, and `--check` has Google validate the upload
 and then discards it. Promotion to production is done in the Play Console.
+If the final commit gets no answer, because of a timeout or a server error,
+the script says so and does not guess: the release may or may not have gone
+through, and the track in the Play Console is the place to look before
+running it again.
 The API can neither create the app nor accept its first build: the app
 record, the first bundle and the Play App Signing enrollment are done by hand
 in the Console. On that first upload, choose to use the existing app signing

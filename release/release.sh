@@ -90,8 +90,21 @@ rm -rf "$dist"
 mkdir -p "$dist"
 shopt -s nullglob
 cp "${OUT_DIR}"/linux/*.{deb,tar.gz} "${OUT_DIR}"/windows/*.{exe,zip} "${OUT_DIR}"/darwin/*.{dmg,zip} \
-	"${OUT_DIR}"/cli/*.{tar.gz,zip} "${OUT_DIR}"/android/*.apk "$dist/" 2>/dev/null || true
+	"${OUT_DIR}"/cli/*.{tar.gz,zip} "$dist/" 2>/dev/null || true
 shopt -u nullglob
+# The APK is taken only from the Android build this run made, by the one name
+# package-android.sh gives it, and only if the SHA256SUMS that script wrote
+# after its last check lists it and still matches. With --skip-android an APK
+# left by an earlier run stays where it is.
+if [[ "$skip_android" != 1 ]]; then
+	apk="caribou-${VERSION}-android-arm64.apk"
+	[[ "$NO_SIGN" == 1 ]] && apk="${apk%.apk}-unsigned.apk"
+	awk -v n="$apk" '$2 == n { found = 1 } END { exit !found }' "${OUT_DIR}/android/SHA256SUMS" ||
+		die "SHA256SUMS in ${OUT_DIR}/android does not list ${apk}"
+	(cd "${OUT_DIR}/android" && sha256sum --check --strict --quiet SHA256SUMS) ||
+		die "${OUT_DIR}/android is not as package-android.sh left it"
+	cp "${OUT_DIR}/android/${apk}" "$dist/"
+fi
 [[ -n "$(ls -A "$dist")" ]] || die "no artifacts found under ${OUT_DIR}"
 
 (cd "$dist" && sha256sum -- * >SHA256SUMS)

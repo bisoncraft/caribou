@@ -238,7 +238,8 @@ Repeat for every tag, release candidates included, on `release-vX.Y`.
       Bundle for Google Play in `release/out/X.Y.Z/android/`. Its version
       code is the commit count of the tag. Where Google Play has already
       seen that number or a higher one, pass `--android-build <N>` with the
-      next free one.
+      next free one. A rerun with `--skip-android` leaves the APK out of
+      `dist/` and `SHA256SUMS`.
 - [ ] iOS, on a Mac with the pinned Xcode and XcodeGen
       (`release/package-ios.sh` names them), signed into Xcode with an Apple
       ID that holds the Admin or Account Holder role on the team. The two
@@ -286,7 +287,9 @@ Repeat for every tag, release candidates included, on `release-vX.Y`.
       testers in the Play Console, install it from Play on a phone, and
       promote it to production there once it checks out. A phone with the
       APK from the GitHub release installed takes the Play build as an
-      update, and the reverse, since both carry the app signing key.
+      update, and the reverse, since both carry the app signing key. If the
+      script reports that the commit got no clear answer, check the track
+      in the Play Console before running it again.
 - [ ] App Store: in App Store Connect, set the version string to `X.Y.Z`,
       select the uploaded build and submit it for review.
 
