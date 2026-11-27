@@ -4,6 +4,7 @@
 package base
 
 import (
+	"context"
 	"fmt"
 	"slices"
 	"strconv"
@@ -155,10 +156,10 @@ func (d *Driver) Exists(walletType, dataDir string, settings map[string]string, 
 	return (&eth.Driver{}).Exists(walletType, dataDir, settings, net)
 }
 
-func (d *Driver) Create(cfg *asset.CreateWalletParams) error {
+func (d *Driver) Create(ctx context.Context, cfg *asset.CreateWalletParams) error {
 	compat, err := NetworkCompatibilityData(cfg.Net)
 	if err != nil {
 		return fmt.Errorf("error finding compatibility data: %v", err)
 	}
-	return eth.CreateEVMWallet(ChainIDs[cfg.Net], cfg, &compat, false)
+	return eth.CreateEVMWallet(ctx, ChainIDs[cfg.Net], cfg, &compat, false)
 }

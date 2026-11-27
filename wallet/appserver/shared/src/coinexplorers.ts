@@ -70,9 +70,9 @@ const explorers: Record<number, Record<number, txURL>> = {
     [Simnet]: (cid) => `https://blockexplorer.one/dash/mainnet/tx/${hash(cid)}`
   },
   133: { // zec
-    [Mainnet]: (cid) => `https://zcashblockexplorer.com/transactions/${hash(cid)}`,
+    [Mainnet]: (cid) => `https://mainnet.zcashexplorer.app/transactions/${hash(cid)}`,
     [Testnet]: (cid) => `https://blockexplorer.one/zcash/testnet/tx/${hash(cid)}`,
-    [Simnet]: (cid) => `https://zcashblockexplorer.com/transactions/${hash(cid)}`
+    [Simnet]: (cid) => `https://mainnet.zcashexplorer.app/transactions/${hash(cid)}`
   },
   128: { // xmr
     [Mainnet]: (cid) => `https://monerohash.com/explorer/tx/${hash(cid)}`

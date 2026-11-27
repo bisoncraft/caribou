@@ -53,7 +53,7 @@ func TestWalletUsesConfiguredProxy(t *testing.T) {
 	if _, err := rand.Read(seed); err != nil {
 		t.Fatal(err)
 	}
-	if err := (&Driver{}).Create(&asset.CreateWalletParams{
+	if err := (&Driver{}).Create(t.Context(), &asset.CreateWalletParams{
 		Type: walletTypeRPC, Seed: seed, Pass: seed, DataDir: dir,
 		Net: util.Simnet, Logger: util.Disabled,
 	}); err != nil {

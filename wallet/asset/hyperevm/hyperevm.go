@@ -4,6 +4,7 @@
 package hyperevm
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/bisoncraft/caribou/util"
@@ -113,10 +114,10 @@ func (d *Driver) Exists(walletType, dataDir string, settings map[string]string, 
 	return (&eth.Driver{}).Exists(walletType, dataDir, settings, net)
 }
 
-func (d *Driver) Create(cfg *asset.CreateWalletParams) error {
+func (d *Driver) Create(ctx context.Context, cfg *asset.CreateWalletParams) error {
 	compat, err := NetworkCompatibilityData(cfg.Net)
 	if err != nil {
 		return fmt.Errorf("error finding compatibility data: %v", err)
 	}
-	return eth.CreateEVMWalletKeyed(ChainIDs[cfg.Net], cfg, &compat, false, hyperliquid.PrivKeyFromSeed)
+	return eth.CreateEVMWalletKeyed(ctx, ChainIDs[cfg.Net], cfg, &compat, false, hyperliquid.PrivKeyFromSeed)
 }

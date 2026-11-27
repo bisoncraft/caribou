@@ -4,6 +4,7 @@
 package btc
 
 import (
+	"context"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -99,7 +100,7 @@ func walletExists(dir string, chainParams *chaincfg.Params) (bool, error) {
 // Create creates a new seeded wallet. Both walletTypeSPV and
 // walletTypeElectrum are supported; they use the same underlying btcwallet
 // database format.
-func (d *Driver) Create(params *asset.CreateWalletParams) error {
+func (d *Driver) Create(_ context.Context, params *asset.CreateWalletParams) error {
 	switch params.Type {
 	case walletTypeSPV, walletTypeElectrum:
 	default:

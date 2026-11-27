@@ -361,12 +361,15 @@ func (w *xcWallet) state() *WalletState {
 		w.network.mtx.RUnlock()
 	}
 
-	// Both reads are cached in the wallet; neither touches the network.
+	// These reads are cached in the wallet; none touches the network.
 	if establisher, ok := w.Wallet.(asset.TrustlineEstablisher); ok {
 		state.Trustline = establisher.TrustlineStatus()
 	}
 	if depositer, ok := w.Wallet.(asset.MinimumDepositer); ok {
 		state.MinDeposit = depositer.MinimumDeposit()
+	}
+	if warner, ok := w.Wallet.(asset.BalanceWarner); ok {
+		state.BalanceWarning = warner.BalanceWarning()
 	}
 
 	return state

@@ -1412,7 +1412,7 @@ func (c *Core) createSeededWallet(assetID uint32, crypter encrypt.Crypter, form 
 	}
 
 	c.log.Infof("Initializing a %s wallet", unbip(assetID))
-	if err = asset.CreateWallet(assetID, &asset.CreateWalletParams{
+	if err = asset.CreateWallet(c.ctx, assetID, &asset.CreateWalletParams{
 		Type:     form.Type,
 		Seed:     seed,
 		Pass:     pw,
@@ -1882,7 +1882,7 @@ func (c *Core) RecoverWallet(assetID uint32, appPW []byte, force bool) error {
 		bday = uint64(creds.Birthday.Unix())
 	}
 
-	if err = asset.CreateWallet(assetID, &asset.CreateWalletParams{
+	if err = asset.CreateWallet(c.ctx, assetID, &asset.CreateWalletParams{
 		Type:     dbWallet.Type,
 		Seed:     seed,
 		Pass:     pw,
@@ -3459,6 +3459,25 @@ func (c *Core) ValidateAddress(address string, assetID uint32) (bool, error) {
 		return false, newError(missingWalletErr, "no wallet found for %s", unbip(assetID))
 	}
 	return wallet.Wallet.ValidateAddress(address), nil
+}
+
+// AddressReceivers returns the receivers of an address on the asset's network,
+// for a wallet that implements asset.ReceiverLister. The wallet answers from
+// the address alone, so this works whether or not the wallet is connected or
+// enabled: a wallet disabled before startup is loaded like any other
+// (loadXCWallet builds the asset wallet without connecting it), and a wallet
+// that failed to load is not in the wallet map, which is the missing wallet
+// error.
+func (c *Core) AddressReceivers(assetID uint32, address string) (*asset.AddressReceivers, error) {
+	wallet, found := c.wallet(assetID)
+	if !found {
+		return nil, newError(missingWalletErr, "no wallet found for %s", unbip(assetID))
+	}
+	lister, is := wallet.Wallet.(asset.ReceiverLister)
+	if !is {
+		return nil, fmt.Errorf("the %s wallet does not list the receivers of an address", unbip(assetID))
+	}
+	return lister.AddressReceivers(address)
 }
 
 // BridgeContractApprovalStatus returns the approval status of the bridge

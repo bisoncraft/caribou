@@ -14,6 +14,6 @@ import (
 	// _ "github.com/bisoncraft/caribou/wallet/asset/firo" // register firo asset
 	_ "github.com/bisoncraft/caribou/wallet/asset/ltc" // register ltc asset
 	// _ "github.com/bisoncraft/caribou/wallet/asset/near" // register near asset
-	// _ "github.com/bisoncraft/caribou/wallet/asset/zec"  // register zec asset
+	// zec is registered in importall_zec.go under the "zec" build tag.
 	_ "github.com/bisoncraft/caribou/wallet/asset/xrp" // register xrp asset
 )

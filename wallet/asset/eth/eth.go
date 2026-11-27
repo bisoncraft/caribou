@@ -357,12 +357,12 @@ func (d *Driver) Exists(walletType, dataDir string, settings map[string]string, 
 	return len(ks.Wallets()) > 0, nil
 }
 
-func (d *Driver) Create(cfg *asset.CreateWalletParams) error {
+func (d *Driver) Create(ctx context.Context, cfg *asset.CreateWalletParams) error {
 	comp, err := NetworkCompatibilityData(cfg.Net)
 	if err != nil {
 		return fmt.Errorf("error finding compatibility data: %v", err)
 	}
-	return CreateEVMWallet(ChainIDs[cfg.Net], cfg, &comp, false)
+	return CreateEVMWallet(ctx, ChainIDs[cfg.Net], cfg, &comp, false)
 }
 
 // Balance is the current balance, including information about the pending
@@ -649,14 +649,14 @@ func privKeyFromSeed(seed []byte) (pk []byte, zero func(), err error) {
 // CreateEVMWallet creates a wallet using the package's standard BIP-39-based
 // key derivation. See CreateEVMWalletKeyed for chains that must derive a
 // different key.
-func CreateEVMWallet(chainID int64, createWalletParams *asset.CreateWalletParams, compat *CompatibilityData, skipConnect bool) error {
-	return CreateEVMWalletKeyed(chainID, createWalletParams, compat, skipConnect, privKeyFromSeed)
+func CreateEVMWallet(ctx context.Context, chainID int64, createWalletParams *asset.CreateWalletParams, compat *CompatibilityData, skipConnect bool) error {
+	return CreateEVMWalletKeyed(ctx, chainID, createWalletParams, compat, skipConnect, privKeyFromSeed)
 }
 
 // CreateEVMWalletKeyed is CreateEVMWallet for chains whose keys are not
 // derived by the standard eth path. keyFn derives the raw private key from
 // the wallet seed.
-func CreateEVMWalletKeyed(chainID int64, createWalletParams *asset.CreateWalletParams, compat *CompatibilityData, skipConnect bool, keyFn func([]byte) ([]byte, func(), error)) error {
+func CreateEVMWalletKeyed(ctx context.Context, chainID int64, createWalletParams *asset.CreateWalletParams, compat *CompatibilityData, skipConnect bool, keyFn func([]byte) ([]byte, func(), error)) error {
 	switch createWalletParams.Type {
 	case walletTypeGeth:
 		return asset.ErrWalletTypeDisabled
@@ -696,7 +696,7 @@ func CreateEVMWalletKeyed(chainID int64, createWalletParams *asset.CreateWalletP
 		providerDef := createWalletParams.Settings[providersKey]
 		if !skipConnect && len(providerDef) > 0 {
 			endpoints := strings.Split(providerDef, providerDelimiter)
-			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 			defer cancel()
 			if err := createAndCheckProviders(ctx, walletDir, endpoints,
 				big.NewInt(chainID), compat, createWalletParams.Net, createWalletParams.Logger, false, createWalletParams.TorProxy); err != nil {

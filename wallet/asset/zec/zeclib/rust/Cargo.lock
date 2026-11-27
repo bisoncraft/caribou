@@ -2862,12 +2862,18 @@ dependencies = [
 name = "zeclib"
 version = "0.1.0"
 dependencies = [
+ "bls12_381",
  "hex",
+ "incrementalmerkletree",
+ "jubjub",
+ "nonempty",
  "orchard",
  "prost",
  "rand 0.10.3",
  "rusqlite",
+ "sapling-crypto",
  "secrecy",
+ "shardtree",
  "tempfile",
  "thiserror",
  "uniffi",
@@ -2880,6 +2886,8 @@ dependencies = [
  "zcash_protocol",
  "zcash_script",
  "zcash_transparent",
+ "zip32",
+ "zip321",
 ]
 
 [[package]]

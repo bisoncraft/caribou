@@ -30,7 +30,7 @@ func TestElectrumWalletUsesConfiguredProxy(t *testing.T) {
 		t.Fatal(err)
 	}
 	logger := util.Disabled
-	if err := (&Driver{}).Create(&asset.CreateWalletParams{
+	if err := (&Driver{}).Create(t.Context(), &asset.CreateWalletParams{
 		Type: walletTypeElectrum, Seed: seed, Pass: []byte("abc"),
 		DataDir: dir, Net: util.Simnet, Logger: logger,
 	}); err != nil {

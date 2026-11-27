@@ -86,8 +86,17 @@ type fakeLwd struct {
 	addrQueries []*walletrpc.TransparentAddressBlockFilter
 	// utxoQueries records the arguments of GetAddressUtxosStream calls.
 	utxoQueries []*walletrpc.GetAddressUtxosArg
-	// rootQueries records the arguments of GetSubtreeRoots calls.
+	// rootQueries records the arguments of GetSubtreeRoots calls, and
+	// txQueries the transaction IDs of GetTransaction calls.
 	rootQueries []*walletrpc.GetSubtreeRootsArg
+	txQueries   [][]byte
+
+	// sent records the transactions SendTransaction accepted. A
+	// transaction made by the fake backend is also put into the mempool,
+	// which is txs with a height of zero. reject, if set, is the reply to
+	// every SendTransaction call, with nothing accepted.
+	sent   [][]byte
+	reject *walletrpc.SendResponse
 }
 
 // newFakeLwd starts a server with a chain of the given height.
@@ -393,6 +402,7 @@ func (s *fakeLwd) GetTransaction(ctx context.Context, f *walletrpc.TxFilter) (*w
 	}
 	s.mtx.Lock()
 	defer s.mtx.Unlock()
+	s.txQueries = append(s.txQueries, f.Hash)
 	if err := s.txFail[string(f.Hash)]; err != nil {
 		return nil, err
 	}
@@ -401,6 +411,70 @@ func (s *fakeLwd) GetTransaction(ctx context.Context, f *walletrpc.TxFilter) (*w
 		return nil, status.Error(codes.NotFound, "Transaction not found")
 	}
 	return tx, nil
+}
+
+func (s *fakeLwd) SendTransaction(ctx context.Context, tx *walletrpc.RawTransaction) (*walletrpc.SendResponse, error) {
+	if err := s.enter(ctx, "SendTransaction"); err != nil {
+		return nil, err
+	}
+	s.mtx.Lock()
+	defer s.mtx.Unlock()
+	if s.reject != nil {
+		return s.reject, nil
+	}
+	if txid, ok := fakeTxID(tx.Data); ok {
+		// zebrad's replies to a transaction it already has, in its mempool
+		// and in its chain.
+		if known, ok := s.txs[string(txid)]; ok {
+			if known.Height == 0 {
+				return &walletrpc.SendResponse{ErrorCode: -1, ErrorMessage: "transaction already exists in mempool"}, nil
+			}
+			return &walletrpc.SendResponse{ErrorCode: -1, ErrorMessage: zebradMinedRefusal}, nil
+		}
+		s.txs[string(txid)] = &walletrpc.RawTransaction{Data: tx.Data}
+	}
+	s.sent = append(s.sent, tx.Data)
+	return &walletrpc.SendResponse{}, nil
+}
+
+// zebradMinedRefusal is zebrad's reply to a transaction that its best chain
+// holds.
+const zebradMinedRefusal = "any transaction with the same effects will be rejected from the mempool " +
+	"until a chain reset: transaction was committed to the best chain"
+
+// sentTxs returns the transactions SendTransaction accepted.
+func (s *fakeLwd) sentTxs() [][]byte {
+	s.mtx.Lock()
+	defer s.mtx.Unlock()
+	return slices.Clone(s.sent)
+}
+
+// mineTx marks a transaction in the mempool as mined at height.
+func (s *fakeLwd) mineTx(txid []byte, height uint64) {
+	s.mtx.Lock()
+	defer s.mtx.Unlock()
+	if tx, ok := s.txs[string(txid)]; ok {
+		tx.Height = height
+	}
+}
+
+// forgetTx forgets a transaction, mined or not.
+func (s *fakeLwd) forgetTx(txid []byte) {
+	s.mtx.Lock()
+	defer s.mtx.Unlock()
+	delete(s.txs, string(txid))
+}
+
+// dropMempool forgets the transactions in the mempool, as a node does when
+// it switches to another chain or restarts.
+func (s *fakeLwd) dropMempool() {
+	s.mtx.Lock()
+	defer s.mtx.Unlock()
+	for id, tx := range s.txs {
+		if tx.Height == 0 {
+			delete(s.txs, id)
+		}
+	}
 }
 
 func (s *fakeLwd) GetTaddressTxids(f *walletrpc.TransparentAddressBlockFilter, stream grpc.ServerStreamingServer[walletrpc.RawTransaction]) error {

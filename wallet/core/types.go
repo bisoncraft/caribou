@@ -68,6 +68,11 @@ type WalletState struct {
 	// the ledger, for wallets that implement asset.MinimumDepositer. Zero
 	// for every other wallet.
 	MinDeposit uint64 `json:"minDeposit,omitempty"`
+	// BalanceWarning is set while a wallet that implements
+	// asset.BalanceWarner reports that its balance can be missing funds.
+	// Changes arrive as a "balanceWarning" wallet note carrying the new
+	// warning, null when it has ended.
+	BalanceWarning *asset.BalanceWarning `json:"balanceWarning,omitempty"`
 }
 
 // FeeState is an on-demand estimate of the current network fee rate and the

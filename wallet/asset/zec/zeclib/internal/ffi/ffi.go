@@ -375,6 +375,15 @@ func uniffiCheckChecksums() {
 	}
 	{
 		checksum := rustCall(func(_uniffiStatus *C.RustCallStatus) C.uint16_t {
+			return C.uniffi_zeclib_checksum_func_parse_address()
+		})
+		if checksum != 16239 {
+			// If this happens try cleaning and rebuilding your project
+			panic("ffi: uniffi_zeclib_checksum_func_parse_address: UniFFI API checksum mismatch")
+		}
+	}
+	{
+		checksum := rustCall(func(_uniffiStatus *C.RustCallStatus) C.uint16_t {
 			return C.uniffi_zeclib_checksum_func_transparent_receiver()
 		})
 		if checksum != 21267 {
@@ -449,7 +458,7 @@ func uniffiCheckChecksums() {
 		checksum := rustCall(func(_uniffiStatus *C.RustCallStatus) C.uint16_t {
 			return C.uniffi_zeclib_checksum_method_wallet_decrypt_and_store_transaction()
 		})
-		if checksum != 11197 {
+		if checksum != 9492 {
 			// If this happens try cleaning and rebuilding your project
 			panic("ffi: uniffi_zeclib_checksum_method_wallet_decrypt_and_store_transaction: UniFFI API checksum mismatch")
 		}
@@ -521,7 +530,7 @@ func uniffiCheckChecksums() {
 		checksum := rustCall(func(_uniffiStatus *C.RustCallStatus) C.uint16_t {
 			return C.uniffi_zeclib_checksum_method_wallet_put_utxo()
 		})
-		if checksum != 47349 {
+		if checksum != 40184 {
 			// If this happens try cleaning and rebuilding your project
 			panic("ffi: uniffi_zeclib_checksum_method_wallet_put_utxo: UniFFI API checksum mismatch")
 		}
@@ -530,7 +539,7 @@ func uniffiCheckChecksums() {
 		checksum := rustCall(func(_uniffiStatus *C.RustCallStatus) C.uint16_t {
 			return C.uniffi_zeclib_checksum_method_wallet_rewind_to_height()
 		})
-		if checksum != 26980 {
+		if checksum != 3944 {
 			// If this happens try cleaning and rebuilding your project
 			panic("ffi: uniffi_zeclib_checksum_method_wallet_rewind_to_height: UniFFI API checksum mismatch")
 		}
@@ -618,6 +627,105 @@ func uniffiCheckChecksums() {
 	}
 	{
 		checksum := rustCall(func(_uniffiStatus *C.RustCallStatus) C.uint16_t {
+			return C.uniffi_zeclib_checksum_method_wallet_missing_transactions()
+		})
+		if checksum != 36968 {
+			// If this happens try cleaning and rebuilding your project
+			panic("ffi: uniffi_zeclib_checksum_method_wallet_missing_transactions: UniFFI API checksum mismatch")
+		}
+	}
+	{
+		checksum := rustCall(func(_uniffiStatus *C.RustCallStatus) C.uint16_t {
+			return C.uniffi_zeclib_checksum_method_wallet_open_transactions()
+		})
+		if checksum != 52981 {
+			// If this happens try cleaning and rebuilding your project
+			panic("ffi: uniffi_zeclib_checksum_method_wallet_open_transactions: UniFFI API checksum mismatch")
+		}
+	}
+	{
+		checksum := rustCall(func(_uniffiStatus *C.RustCallStatus) C.uint16_t {
+			return C.uniffi_zeclib_checksum_method_wallet_owns_address()
+		})
+		if checksum != 32156 {
+			// If this happens try cleaning and rebuilding your project
+			panic("ffi: uniffi_zeclib_checksum_method_wallet_owns_address: UniFFI API checksum mismatch")
+		}
+	}
+	{
+		checksum := rustCall(func(_uniffiStatus *C.RustCallStatus) C.uint16_t {
+			return C.uniffi_zeclib_checksum_method_wallet_transaction()
+		})
+		if checksum != 28113 {
+			// If this happens try cleaning and rebuilding your project
+			panic("ffi: uniffi_zeclib_checksum_method_wallet_transaction: UniFFI API checksum mismatch")
+		}
+	}
+	{
+		checksum := rustCall(func(_uniffiStatus *C.RustCallStatus) C.uint16_t {
+			return C.uniffi_zeclib_checksum_method_wallet_transactions()
+		})
+		if checksum != 8822 {
+			// If this happens try cleaning and rebuilding your project
+			panic("ffi: uniffi_zeclib_checksum_method_wallet_transactions: UniFFI API checksum mismatch")
+		}
+	}
+	{
+		checksum := rustCall(func(_uniffiStatus *C.RustCallStatus) C.uint16_t {
+			return C.uniffi_zeclib_checksum_method_wallet_rebroadcast_inventory()
+		})
+		if checksum != 53167 {
+			// If this happens try cleaning and rebuilding your project
+			panic("ffi: uniffi_zeclib_checksum_method_wallet_rebroadcast_inventory: UniFFI API checksum mismatch")
+		}
+	}
+	{
+		checksum := rustCall(func(_uniffiStatus *C.RustCallStatus) C.uint16_t {
+			return C.uniffi_zeclib_checksum_method_wallet_estimate_transfer()
+		})
+		if checksum != 5837 {
+			// If this happens try cleaning and rebuilding your project
+			panic("ffi: uniffi_zeclib_checksum_method_wallet_estimate_transfer: UniFFI API checksum mismatch")
+		}
+	}
+	{
+		checksum := rustCall(func(_uniffiStatus *C.RustCallStatus) C.uint16_t {
+			return C.uniffi_zeclib_checksum_method_wallet_send()
+		})
+		if checksum != 40698 {
+			// If this happens try cleaning and rebuilding your project
+			panic("ffi: uniffi_zeclib_checksum_method_wallet_send: UniFFI API checksum mismatch")
+		}
+	}
+	{
+		checksum := rustCall(func(_uniffiStatus *C.RustCallStatus) C.uint16_t {
+			return C.uniffi_zeclib_checksum_method_wallet_spendable()
+		})
+		if checksum != 51151 {
+			// If this happens try cleaning and rebuilding your project
+			panic("ffi: uniffi_zeclib_checksum_method_wallet_spendable: UniFFI API checksum mismatch")
+		}
+	}
+	{
+		checksum := rustCall(func(_uniffiStatus *C.RustCallStatus) C.uint16_t {
+			return C.uniffi_zeclib_checksum_method_wallet_estimate_send_max()
+		})
+		if checksum != 63385 {
+			// If this happens try cleaning and rebuilding your project
+			panic("ffi: uniffi_zeclib_checksum_method_wallet_estimate_send_max: UniFFI API checksum mismatch")
+		}
+	}
+	{
+		checksum := rustCall(func(_uniffiStatus *C.RustCallStatus) C.uint16_t {
+			return C.uniffi_zeclib_checksum_method_wallet_send_max()
+		})
+		if checksum != 52092 {
+			// If this happens try cleaning and rebuilding your project
+			panic("ffi: uniffi_zeclib_checksum_method_wallet_send_max: UniFFI API checksum mismatch")
+		}
+	}
+	{
+		checksum := rustCall(func(_uniffiStatus *C.RustCallStatus) C.uint16_t {
 			return C.uniffi_zeclib_checksum_constructor_wallet_open()
 		})
 		if checksum != 55931 {
@@ -674,6 +782,30 @@ func (FfiConverterUint64) Read(reader io.Reader) uint64 {
 type FfiDestroyerUint64 struct{}
 
 func (FfiDestroyerUint64) Destroy(_ uint64) {}
+
+type FfiConverterInt64 struct{}
+
+var FfiConverterInt64INSTANCE = FfiConverterInt64{}
+
+func (FfiConverterInt64) Lower(value int64) C.int64_t {
+	return C.int64_t(value)
+}
+
+func (FfiConverterInt64) Write(writer io.Writer, value int64) {
+	writeInt64(writer, value)
+}
+
+func (FfiConverterInt64) Lift(value C.int64_t) int64 {
+	return int64(value)
+}
+
+func (FfiConverterInt64) Read(reader io.Reader) int64 {
+	return readInt64(reader)
+}
+
+type FfiDestroyerInt64 struct{}
+
+func (FfiDestroyerInt64) Destroy(_ int64) {}
 
 type FfiConverterBool struct{}
 
@@ -960,6 +1092,10 @@ type WalletInterface interface {
 	//
 	// `mined_height` is the height of the block holding the transaction, or
 	// unset for a transaction that is not mined.
+	//
+	// A transaction that does not involve the wallet is not stored, and the
+	// call still succeeds. A caller that needs the transaction held checks
+	// with [`missing_transactions`](Wallet::missing_transactions).
 	DecryptAndStoreTransaction(tx []byte, expectedTxid *[]byte, minedHeight *uint32) ([]byte, error)
 	// The height up to which every block since the birthday has been
 	// scanned, or nothing if no block has been scanned.
@@ -1005,6 +1141,32 @@ type WalletInterface interface {
 	// Records an unspent transparent output that a server reported for one
 	// of the wallet's transparent addresses. Storing an output again
 	// replaces it.
+	//
+	// The wallet tells a coinbase output from a regular one only by its
+	// transaction, and the caller is responsible for holding it first:
+	// stored with
+	// [`decrypt_and_store_transaction`](Wallet::decrypt_and_store_transaction),
+	// given the ID it was fetched by, and confirmed held with
+	// [`missing_transactions`](Wallet::missing_transactions). An output
+	// whose transaction is not held is still recorded, unchecked, and
+	// counts as a regular output that a payment can select. This call does
+	// not refuse it because recording outputs alone is how tests and
+	// fixtures build wallets with many inputs; the sync loop never records
+	// an output before its transaction is held. The precondition holds
+	// because the only caller is the package's private Go backend. Should
+	// this crate become an interface of its own, the unchecked path belongs
+	// in a helper for fixtures, and this call should refuse an output whose
+	// transaction is not held.
+	//
+	// When the wallet holds the output's transaction, the output is checked
+	// against it and classified before anything is written. An output that
+	// the transaction does not have, with that index, script and value,
+	// fails with [`WalletError::InvalidArgument`]. A held transaction that
+	// cannot be parsed fails with [`WalletError::Database`]. Either way the
+	// output is not recorded. A coinbase transaction whose mark a rewind
+	// cleared is marked again first, so a recorded coinbase output is never
+	// taken for a regular one, whatever the order of the calls and any
+	// rewind between them.
 	PutUtxo(utxo Utxo) error
 	// Discards everything the wallet learned from blocks above `height` and
 	// returns the height it rewound to, which is `height` or lower.
@@ -1018,6 +1180,10 @@ type WalletInterface interface {
 	// Checkpoints are made for the tree state a scanned batch starts from,
 	// for every block that adds a note commitment, and from NU6.3 on for
 	// every height of the anchor grid.
+	//
+	// The coinbase transactions the rewind unmines are marked as coinbase
+	// again in the same database transaction. A held transaction that
+	// cannot be read fails the call and nothing is rewound.
 	RewindToHeight(height uint32) (uint32, error)
 	// Scans a batch of consecutive compact blocks for transactions of the
 	// wallet's accounts and stores what it finds.
@@ -1071,6 +1237,145 @@ type WalletInterface interface {
 	// confirmations for outputs of the wallet's own transactions and 10 for
 	// everything else.
 	WalletSummary(minConfirmations *uint32) (*WalletSummary, error)
+	// Returns the transaction IDs among `txids` whose full transaction the
+	// wallet does not hold: unknown to it, or known only from an output
+	// seen in a compact block or an unspent-output reply. IDs are in the
+	// byte order of the wire.
+	MissingTransactions(txids [][]byte) ([][]byte, error)
+	// Lists the account's transactions whose record can still change: the
+	// unmined ones, those with at most `depth` confirmations, those mined
+	// in a block the wallet has not scanned yet (whose block time is still
+	// unknown), those whose raw transaction the wallet lacks, and those
+	// funded by the account whose fee is unknown. A receive paid from
+	// someone else's transparent outputs keeps an unknown fee for good and
+	// is not listed for that alone.
+	//
+	// A transaction with exactly `depth` confirmations is still listed, so
+	// a caller that counts confirmations against the returned chain tip
+	// sees it reach `depth` before it leaves the listing.
+	OpenTransactions(accountUuid string, depth uint32) (TxListing, error)
+	// Returns the UUID of the account an address belongs to, or nothing if
+	// it belongs to none. A transparent address matches only if the wallet
+	// generated it. A unified address matches the account that can derive
+	// one of its shielded receivers, generated or not, such as an address
+	// reduced to the Orchard receiver of one of the wallet's addresses.
+	OwnsAddress(address string) (*string, error)
+	// Returns one transaction of the account's history, or nothing if the
+	// account has no transaction with that ID. `txid` is in the byte order
+	// of the wire.
+	Transaction(accountUuid string, txid []byte) (TxLookup, error)
+	// Lists the account's transactions with a `seq` above `after_seq`, at
+	// most `limit` of them, in `seq` order. A listing from zero, continued
+	// from the last `seq` returned, reads the whole history. A listing from
+	// a watermark reads the transactions discovered since, whatever their
+	// height.
+	//
+	// A transaction can be linked to the account after its row was stored,
+	// and then appears with its old, lower `seq`, below a watermark: for one,
+	// a transaction stored with a spend of a transparent output that the
+	// wallet learns of later. A full listing finds it.
+	Transactions(accountUuid string, afterSeq uint64, limit uint32) (TxListing, error)
+	// Lists the transactions this wallet created that are not mined and not
+	// expired, oldest first, for rebroadcast.
+	//
+	// A transaction counts as expired once its expiry height is below the
+	// next block, that is at or below the chain tip most recently given to
+	// [`update_chain_tip`](Wallet::update_chain_tip). Before the first chain
+	// tip every unmined transaction is listed. The list reflects what the
+	// wallet knows: a transaction that was mined in a block the wallet has
+	// not scanned is still listed.
+	RebroadcastInventory() ([]UnminedTransaction, error)
+	// Returns the fee, in zatoshis, of a payment of `amount` zatoshis to
+	// `address` from the account, and the address and pool the payment
+	// would name. The payment is proposed as [`send`](Wallet::send) would
+	// propose it and then discarded: nothing is stored or locked. See
+	// `send` for the arguments and errors.
+	EstimateTransfer(accountUuid string, address string, amount uint64, memo *[]byte, minConfirmations *uint32) (TransferEstimate, error)
+	// Pays `amount` zatoshis to `address` from the account, and stores the
+	// transaction in the wallet as unmined. Nothing is broadcast: the caller
+	// broadcasts the returned transactions.
+	//
+	// A unified address is paid at its Orchard receiver, in the Ironwood
+	// pool, if it has one, and otherwise at its transparent receiver. A
+	// Sapling address, a TEX address and a unified address with neither
+	// receiver fail with [`WalletError::UnsupportedRecipient`].
+	//
+	// The inputs are the account's Ironwood notes and its transparent
+	// outputs other than coinbase outputs, transparent outputs first. Change
+	// goes to the Ironwood pool. `min_confirmations` selects the
+	// confirmations policy, as for [`wallet_summary`](Wallet::wallet_summary).
+	//
+	// `memo` is the memo of the recipient's output, up to 512 bytes. An
+	// empty memo is still a memo: it is rejected for a transparent recipient
+	// and sent as an empty memo to a shielded one. No memo is `None`.
+	// `seed` is the account's ZIP 32 seed. It is checked against the account
+	// after the recipient, memo and amount, and before anything is
+	// proposed.
+	// A payment to a transparent receiver below the smallest output nodes
+	// relay, 54 zatoshis for the standard scripts, fails with
+	// [`WalletError::AmountBelowMinimum`] before anything is proposed. A
+	// transaction with more than [`MAX_IRONWOOD_ACTIONS`] Ironwood actions
+	// fails with [`WalletError::TooLarge`]. The send fails before anything is
+	// built if its fee exceeds `max_fee`.
+	//
+	// The seed is erased when the call returns, and so are the shielded
+	// spending keys derived from it. The transparent account private key is
+	// not: zcash_keys does not erase it when it is dropped, so a copy can
+	// remain in freed memory.
+	//
+	// Proposing and creating run under one hold of the database lock, so no
+	// other call can select the same inputs in between. Once this returns,
+	// the transaction is stored and its inputs count as spent until it is
+	// mined or expires, whether or not it is ever broadcast.
+	Send(accountUuid string, seed []byte, address string, amount uint64, memo *[]byte, maxFee uint64, minConfirmations *uint32) (SendResult, error)
+	// Returns the value the account can spend now: the value of the inputs
+	// a send can select, under the confirmations policy of
+	// `min_confirmations` (see [`wallet_summary`](Wallet::wallet_summary)).
+	//
+	// The figure is exact once the wallet is scanned to the tip. During a
+	// scan it can include notes that a send cannot select yet (see
+	// `eligible_inputs`). The spendable balances of the summary do not
+	// always match it either: they count transparent coinbase outputs, which
+	// a send does not spend, and they can count a note that is not yet at or
+	// below the anchor a proposal uses. Both values are zero while the
+	// wallet lacks a chain tip.
+	Spendable(accountUuid string, minConfirmations *uint32) (SpendableValue, error)
+	// Returns what [`send_max`](Wallet::send_max) would send to `address`:
+	// the amount, the fee, the paid address and pool, and the spendable
+	// funds one transaction could not take. It builds and validates the
+	// proposal without creating it: nothing is stored or locked. It checks
+	// neither a seed nor a fee limit nor an expected amount, which it does
+	// not take.
+	EstimateSendMax(accountUuid string, address string, memo *[]byte, minConfirmations *uint32) (SendMaxEstimate, error)
+	// Sends everything the account can spend in one transaction to
+	// `address`, and stores the transaction as unmined. Nothing is
+	// broadcast.
+	//
+	// The inputs are every input a [`send`](Wallet::send) could select: the
+	// account's Ironwood notes and its transparent outputs above 5,000
+	// zatoshis that are not coinbase outputs, under the confirmations
+	// policy of `min_confirmations`. One transaction spends at most 1,333
+	// transparent outputs and as many notes as [`MAX_IRONWOOD_ACTIONS`]
+	// allows, the largest of each. The rest is reported in the result as
+	// left behind. Those funds stay spendable by a later transaction,
+	// although on their own they may not cover its fee. The transaction has
+	// no change: the recipient gets the inputs less the fee.
+	//
+	// `expected_amount`, when set, is the amount the caller approved, such
+	// as the amount of an earlier [`estimate_send_max`](Wallet::estimate_send_max).
+	// The inputs can change in between, and if the amount differs the call
+	// fails with [`WalletError::AmountChanged`] and creates nothing.
+	//
+	// An input that becomes spendable after the estimate raises the fee and
+	// the amount together, and the fee limit is checked first, so
+	// [`WalletError::FeeTooHigh`] can mean the same thing. For either error
+	// the remedy is a new estimate.
+	//
+	// It fails with [`WalletError::InsufficientFunds`] when the inputs do
+	// not cover the fee and a payment of at least one zatoshi, or for a
+	// transparent recipient the smallest output nodes relay. The other
+	// arguments, the checks and the errors are those of `send`.
+	SendMax(accountUuid string, seed []byte, address string, memo *[]byte, maxFee uint64, expectedAmount *uint64, minConfirmations *uint32) (SendMaxResult, error)
 }
 
 // A Zcash light wallet database for the Ironwood shielded pool.
@@ -1284,6 +1589,10 @@ func (_self *Wallet) CurrentAddress(accountUuid string) (string, error) {
 //
 // `mined_height` is the height of the block holding the transaction, or
 // unset for a transaction that is not mined.
+//
+// A transaction that does not involve the wallet is not stored, and the
+// call still succeeds. A caller that needs the transaction held checks
+// with [`missing_transactions`](Wallet::missing_transactions).
 func (_self *Wallet) DecryptAndStoreTransaction(tx []byte, expectedTxid *[]byte, minedHeight *uint32) ([]byte, error) {
 	_pointer := _self.ffiObject.incrementPointer("*Wallet")
 	defer _self.ffiObject.decrementPointer()
@@ -1437,6 +1746,32 @@ func (_self *Wallet) PutSubtreeRoots(startIndex uint64, roots []SubtreeRoot) err
 // Records an unspent transparent output that a server reported for one
 // of the wallet's transparent addresses. Storing an output again
 // replaces it.
+//
+// The wallet tells a coinbase output from a regular one only by its
+// transaction, and the caller is responsible for holding it first:
+// stored with
+// [`decrypt_and_store_transaction`](Wallet::decrypt_and_store_transaction),
+// given the ID it was fetched by, and confirmed held with
+// [`missing_transactions`](Wallet::missing_transactions). An output
+// whose transaction is not held is still recorded, unchecked, and
+// counts as a regular output that a payment can select. This call does
+// not refuse it because recording outputs alone is how tests and
+// fixtures build wallets with many inputs; the sync loop never records
+// an output before its transaction is held. The precondition holds
+// because the only caller is the package's private Go backend. Should
+// this crate become an interface of its own, the unchecked path belongs
+// in a helper for fixtures, and this call should refuse an output whose
+// transaction is not held.
+//
+// When the wallet holds the output's transaction, the output is checked
+// against it and classified before anything is written. An output that
+// the transaction does not have, with that index, script and value,
+// fails with [`WalletError::InvalidArgument`]. A held transaction that
+// cannot be parsed fails with [`WalletError::Database`]. Either way the
+// output is not recorded. A coinbase transaction whose mark a rewind
+// cleared is marked again first, so a recorded coinbase output is never
+// taken for a regular one, whatever the order of the calls and any
+// rewind between them.
 func (_self *Wallet) PutUtxo(utxo Utxo) error {
 	_pointer := _self.ffiObject.incrementPointer("*Wallet")
 	defer _self.ffiObject.decrementPointer()
@@ -1460,6 +1795,10 @@ func (_self *Wallet) PutUtxo(utxo Utxo) error {
 // Checkpoints are made for the tree state a scanned batch starts from,
 // for every block that adds a note commitment, and from NU6.3 on for
 // every height of the anchor grid.
+//
+// The coinbase transactions the rewind unmines are marked as coinbase
+// again in the same database transaction. A held transaction that
+// cannot be read fails the call and nothing is rewound.
 func (_self *Wallet) RewindToHeight(height uint32) (uint32, error) {
 	_pointer := _self.ffiObject.incrementPointer("*Wallet")
 	defer _self.ffiObject.decrementPointer()
@@ -1656,6 +1995,321 @@ func (_self *Wallet) WalletSummary(minConfirmations *uint32) (*WalletSummary, er
 		return FfiConverterOptionalWalletSummaryINSTANCE.Lift(_uniffiRV), nil
 	}
 }
+
+// Returns the transaction IDs among `txids` whose full transaction the
+// wallet does not hold: unknown to it, or known only from an output
+// seen in a compact block or an unspent-output reply. IDs are in the
+// byte order of the wire.
+func (_self *Wallet) MissingTransactions(txids [][]byte) ([][]byte, error) {
+	_pointer := _self.ffiObject.incrementPointer("*Wallet")
+	defer _self.ffiObject.decrementPointer()
+	_uniffiRV, _uniffiErr := rustCallWithError[*WalletError](FfiConverterWalletError{}, func(_uniffiStatus *C.RustCallStatus) RustBufferI {
+		return GoRustBuffer{
+			inner: C.uniffi_zeclib_fn_method_wallet_missing_transactions(
+				_pointer, FfiConverterSequenceBytesINSTANCE.Lower(txids), _uniffiStatus),
+		}
+	})
+	if _uniffiErr != nil {
+		var _uniffiDefaultValue [][]byte
+		return _uniffiDefaultValue, _uniffiErr
+	} else {
+		return FfiConverterSequenceBytesINSTANCE.Lift(_uniffiRV), nil
+	}
+}
+
+// Lists the account's transactions whose record can still change: the
+// unmined ones, those with at most `depth` confirmations, those mined
+// in a block the wallet has not scanned yet (whose block time is still
+// unknown), those whose raw transaction the wallet lacks, and those
+// funded by the account whose fee is unknown. A receive paid from
+// someone else's transparent outputs keeps an unknown fee for good and
+// is not listed for that alone.
+//
+// A transaction with exactly `depth` confirmations is still listed, so
+// a caller that counts confirmations against the returned chain tip
+// sees it reach `depth` before it leaves the listing.
+func (_self *Wallet) OpenTransactions(accountUuid string, depth uint32) (TxListing, error) {
+	_pointer := _self.ffiObject.incrementPointer("*Wallet")
+	defer _self.ffiObject.decrementPointer()
+	_uniffiRV, _uniffiErr := rustCallWithError[*WalletError](FfiConverterWalletError{}, func(_uniffiStatus *C.RustCallStatus) RustBufferI {
+		return GoRustBuffer{
+			inner: C.uniffi_zeclib_fn_method_wallet_open_transactions(
+				_pointer, FfiConverterStringINSTANCE.Lower(accountUuid), FfiConverterUint32INSTANCE.Lower(depth), _uniffiStatus),
+		}
+	})
+	if _uniffiErr != nil {
+		var _uniffiDefaultValue TxListing
+		return _uniffiDefaultValue, _uniffiErr
+	} else {
+		return FfiConverterTxListingINSTANCE.Lift(_uniffiRV), nil
+	}
+}
+
+// Returns the UUID of the account an address belongs to, or nothing if
+// it belongs to none. A transparent address matches only if the wallet
+// generated it. A unified address matches the account that can derive
+// one of its shielded receivers, generated or not, such as an address
+// reduced to the Orchard receiver of one of the wallet's addresses.
+func (_self *Wallet) OwnsAddress(address string) (*string, error) {
+	_pointer := _self.ffiObject.incrementPointer("*Wallet")
+	defer _self.ffiObject.decrementPointer()
+	_uniffiRV, _uniffiErr := rustCallWithError[*WalletError](FfiConverterWalletError{}, func(_uniffiStatus *C.RustCallStatus) RustBufferI {
+		return GoRustBuffer{
+			inner: C.uniffi_zeclib_fn_method_wallet_owns_address(
+				_pointer, FfiConverterStringINSTANCE.Lower(address), _uniffiStatus),
+		}
+	})
+	if _uniffiErr != nil {
+		var _uniffiDefaultValue *string
+		return _uniffiDefaultValue, _uniffiErr
+	} else {
+		return FfiConverterOptionalStringINSTANCE.Lift(_uniffiRV), nil
+	}
+}
+
+// Returns one transaction of the account's history, or nothing if the
+// account has no transaction with that ID. `txid` is in the byte order
+// of the wire.
+func (_self *Wallet) Transaction(accountUuid string, txid []byte) (TxLookup, error) {
+	_pointer := _self.ffiObject.incrementPointer("*Wallet")
+	defer _self.ffiObject.decrementPointer()
+	_uniffiRV, _uniffiErr := rustCallWithError[*WalletError](FfiConverterWalletError{}, func(_uniffiStatus *C.RustCallStatus) RustBufferI {
+		return GoRustBuffer{
+			inner: C.uniffi_zeclib_fn_method_wallet_transaction(
+				_pointer, FfiConverterStringINSTANCE.Lower(accountUuid), FfiConverterBytesINSTANCE.Lower(txid), _uniffiStatus),
+		}
+	})
+	if _uniffiErr != nil {
+		var _uniffiDefaultValue TxLookup
+		return _uniffiDefaultValue, _uniffiErr
+	} else {
+		return FfiConverterTxLookupINSTANCE.Lift(_uniffiRV), nil
+	}
+}
+
+// Lists the account's transactions with a `seq` above `after_seq`, at
+// most `limit` of them, in `seq` order. A listing from zero, continued
+// from the last `seq` returned, reads the whole history. A listing from
+// a watermark reads the transactions discovered since, whatever their
+// height.
+//
+// A transaction can be linked to the account after its row was stored,
+// and then appears with its old, lower `seq`, below a watermark: for one,
+// a transaction stored with a spend of a transparent output that the
+// wallet learns of later. A full listing finds it.
+func (_self *Wallet) Transactions(accountUuid string, afterSeq uint64, limit uint32) (TxListing, error) {
+	_pointer := _self.ffiObject.incrementPointer("*Wallet")
+	defer _self.ffiObject.decrementPointer()
+	_uniffiRV, _uniffiErr := rustCallWithError[*WalletError](FfiConverterWalletError{}, func(_uniffiStatus *C.RustCallStatus) RustBufferI {
+		return GoRustBuffer{
+			inner: C.uniffi_zeclib_fn_method_wallet_transactions(
+				_pointer, FfiConverterStringINSTANCE.Lower(accountUuid), FfiConverterUint64INSTANCE.Lower(afterSeq), FfiConverterUint32INSTANCE.Lower(limit), _uniffiStatus),
+		}
+	})
+	if _uniffiErr != nil {
+		var _uniffiDefaultValue TxListing
+		return _uniffiDefaultValue, _uniffiErr
+	} else {
+		return FfiConverterTxListingINSTANCE.Lift(_uniffiRV), nil
+	}
+}
+
+// Lists the transactions this wallet created that are not mined and not
+// expired, oldest first, for rebroadcast.
+//
+// A transaction counts as expired once its expiry height is below the
+// next block, that is at or below the chain tip most recently given to
+// [`update_chain_tip`](Wallet::update_chain_tip). Before the first chain
+// tip every unmined transaction is listed. The list reflects what the
+// wallet knows: a transaction that was mined in a block the wallet has
+// not scanned is still listed.
+func (_self *Wallet) RebroadcastInventory() ([]UnminedTransaction, error) {
+	_pointer := _self.ffiObject.incrementPointer("*Wallet")
+	defer _self.ffiObject.decrementPointer()
+	_uniffiRV, _uniffiErr := rustCallWithError[*WalletError](FfiConverterWalletError{}, func(_uniffiStatus *C.RustCallStatus) RustBufferI {
+		return GoRustBuffer{
+			inner: C.uniffi_zeclib_fn_method_wallet_rebroadcast_inventory(
+				_pointer, _uniffiStatus),
+		}
+	})
+	if _uniffiErr != nil {
+		var _uniffiDefaultValue []UnminedTransaction
+		return _uniffiDefaultValue, _uniffiErr
+	} else {
+		return FfiConverterSequenceUnminedTransactionINSTANCE.Lift(_uniffiRV), nil
+	}
+}
+
+// Returns the fee, in zatoshis, of a payment of `amount` zatoshis to
+// `address` from the account, and the address and pool the payment
+// would name. The payment is proposed as [`send`](Wallet::send) would
+// propose it and then discarded: nothing is stored or locked. See
+// `send` for the arguments and errors.
+func (_self *Wallet) EstimateTransfer(accountUuid string, address string, amount uint64, memo *[]byte, minConfirmations *uint32) (TransferEstimate, error) {
+	_pointer := _self.ffiObject.incrementPointer("*Wallet")
+	defer _self.ffiObject.decrementPointer()
+	_uniffiRV, _uniffiErr := rustCallWithError[*WalletError](FfiConverterWalletError{}, func(_uniffiStatus *C.RustCallStatus) RustBufferI {
+		return GoRustBuffer{
+			inner: C.uniffi_zeclib_fn_method_wallet_estimate_transfer(
+				_pointer, FfiConverterStringINSTANCE.Lower(accountUuid), FfiConverterStringINSTANCE.Lower(address), FfiConverterUint64INSTANCE.Lower(amount), FfiConverterOptionalBytesINSTANCE.Lower(memo), FfiConverterOptionalUint32INSTANCE.Lower(minConfirmations), _uniffiStatus),
+		}
+	})
+	if _uniffiErr != nil {
+		var _uniffiDefaultValue TransferEstimate
+		return _uniffiDefaultValue, _uniffiErr
+	} else {
+		return FfiConverterTransferEstimateINSTANCE.Lift(_uniffiRV), nil
+	}
+}
+
+// Pays `amount` zatoshis to `address` from the account, and stores the
+// transaction in the wallet as unmined. Nothing is broadcast: the caller
+// broadcasts the returned transactions.
+//
+// A unified address is paid at its Orchard receiver, in the Ironwood
+// pool, if it has one, and otherwise at its transparent receiver. A
+// Sapling address, a TEX address and a unified address with neither
+// receiver fail with [`WalletError::UnsupportedRecipient`].
+//
+// The inputs are the account's Ironwood notes and its transparent
+// outputs other than coinbase outputs, transparent outputs first. Change
+// goes to the Ironwood pool. `min_confirmations` selects the
+// confirmations policy, as for [`wallet_summary`](Wallet::wallet_summary).
+//
+// `memo` is the memo of the recipient's output, up to 512 bytes. An
+// empty memo is still a memo: it is rejected for a transparent recipient
+// and sent as an empty memo to a shielded one. No memo is `None`.
+// `seed` is the account's ZIP 32 seed. It is checked against the account
+// after the recipient, memo and amount, and before anything is
+// proposed.
+// A payment to a transparent receiver below the smallest output nodes
+// relay, 54 zatoshis for the standard scripts, fails with
+// [`WalletError::AmountBelowMinimum`] before anything is proposed. A
+// transaction with more than [`MAX_IRONWOOD_ACTIONS`] Ironwood actions
+// fails with [`WalletError::TooLarge`]. The send fails before anything is
+// built if its fee exceeds `max_fee`.
+//
+// The seed is erased when the call returns, and so are the shielded
+// spending keys derived from it. The transparent account private key is
+// not: zcash_keys does not erase it when it is dropped, so a copy can
+// remain in freed memory.
+//
+// Proposing and creating run under one hold of the database lock, so no
+// other call can select the same inputs in between. Once this returns,
+// the transaction is stored and its inputs count as spent until it is
+// mined or expires, whether or not it is ever broadcast.
+func (_self *Wallet) Send(accountUuid string, seed []byte, address string, amount uint64, memo *[]byte, maxFee uint64, minConfirmations *uint32) (SendResult, error) {
+	_pointer := _self.ffiObject.incrementPointer("*Wallet")
+	defer _self.ffiObject.decrementPointer()
+	_uniffiRV, _uniffiErr := rustCallWithError[*WalletError](FfiConverterWalletError{}, func(_uniffiStatus *C.RustCallStatus) RustBufferI {
+		return GoRustBuffer{
+			inner: C.uniffi_zeclib_fn_method_wallet_send(
+				_pointer, FfiConverterStringINSTANCE.Lower(accountUuid), FfiConverterBytesINSTANCE.Lower(seed), FfiConverterStringINSTANCE.Lower(address), FfiConverterUint64INSTANCE.Lower(amount), FfiConverterOptionalBytesINSTANCE.Lower(memo), FfiConverterUint64INSTANCE.Lower(maxFee), FfiConverterOptionalUint32INSTANCE.Lower(minConfirmations), _uniffiStatus),
+		}
+	})
+	if _uniffiErr != nil {
+		var _uniffiDefaultValue SendResult
+		return _uniffiDefaultValue, _uniffiErr
+	} else {
+		return FfiConverterSendResultINSTANCE.Lift(_uniffiRV), nil
+	}
+}
+
+// Returns the value the account can spend now: the value of the inputs
+// a send can select, under the confirmations policy of
+// `min_confirmations` (see [`wallet_summary`](Wallet::wallet_summary)).
+//
+// The figure is exact once the wallet is scanned to the tip. During a
+// scan it can include notes that a send cannot select yet (see
+// `eligible_inputs`). The spendable balances of the summary do not
+// always match it either: they count transparent coinbase outputs, which
+// a send does not spend, and they can count a note that is not yet at or
+// below the anchor a proposal uses. Both values are zero while the
+// wallet lacks a chain tip.
+func (_self *Wallet) Spendable(accountUuid string, minConfirmations *uint32) (SpendableValue, error) {
+	_pointer := _self.ffiObject.incrementPointer("*Wallet")
+	defer _self.ffiObject.decrementPointer()
+	_uniffiRV, _uniffiErr := rustCallWithError[*WalletError](FfiConverterWalletError{}, func(_uniffiStatus *C.RustCallStatus) RustBufferI {
+		return GoRustBuffer{
+			inner: C.uniffi_zeclib_fn_method_wallet_spendable(
+				_pointer, FfiConverterStringINSTANCE.Lower(accountUuid), FfiConverterOptionalUint32INSTANCE.Lower(minConfirmations), _uniffiStatus),
+		}
+	})
+	if _uniffiErr != nil {
+		var _uniffiDefaultValue SpendableValue
+		return _uniffiDefaultValue, _uniffiErr
+	} else {
+		return FfiConverterSpendableValueINSTANCE.Lift(_uniffiRV), nil
+	}
+}
+
+// Returns what [`send_max`](Wallet::send_max) would send to `address`:
+// the amount, the fee, the paid address and pool, and the spendable
+// funds one transaction could not take. It builds and validates the
+// proposal without creating it: nothing is stored or locked. It checks
+// neither a seed nor a fee limit nor an expected amount, which it does
+// not take.
+func (_self *Wallet) EstimateSendMax(accountUuid string, address string, memo *[]byte, minConfirmations *uint32) (SendMaxEstimate, error) {
+	_pointer := _self.ffiObject.incrementPointer("*Wallet")
+	defer _self.ffiObject.decrementPointer()
+	_uniffiRV, _uniffiErr := rustCallWithError[*WalletError](FfiConverterWalletError{}, func(_uniffiStatus *C.RustCallStatus) RustBufferI {
+		return GoRustBuffer{
+			inner: C.uniffi_zeclib_fn_method_wallet_estimate_send_max(
+				_pointer, FfiConverterStringINSTANCE.Lower(accountUuid), FfiConverterStringINSTANCE.Lower(address), FfiConverterOptionalBytesINSTANCE.Lower(memo), FfiConverterOptionalUint32INSTANCE.Lower(minConfirmations), _uniffiStatus),
+		}
+	})
+	if _uniffiErr != nil {
+		var _uniffiDefaultValue SendMaxEstimate
+		return _uniffiDefaultValue, _uniffiErr
+	} else {
+		return FfiConverterSendMaxEstimateINSTANCE.Lift(_uniffiRV), nil
+	}
+}
+
+// Sends everything the account can spend in one transaction to
+// `address`, and stores the transaction as unmined. Nothing is
+// broadcast.
+//
+// The inputs are every input a [`send`](Wallet::send) could select: the
+// account's Ironwood notes and its transparent outputs above 5,000
+// zatoshis that are not coinbase outputs, under the confirmations
+// policy of `min_confirmations`. One transaction spends at most 1,333
+// transparent outputs and as many notes as [`MAX_IRONWOOD_ACTIONS`]
+// allows, the largest of each. The rest is reported in the result as
+// left behind. Those funds stay spendable by a later transaction,
+// although on their own they may not cover its fee. The transaction has
+// no change: the recipient gets the inputs less the fee.
+//
+// `expected_amount`, when set, is the amount the caller approved, such
+// as the amount of an earlier [`estimate_send_max`](Wallet::estimate_send_max).
+// The inputs can change in between, and if the amount differs the call
+// fails with [`WalletError::AmountChanged`] and creates nothing.
+//
+// An input that becomes spendable after the estimate raises the fee and
+// the amount together, and the fee limit is checked first, so
+// [`WalletError::FeeTooHigh`] can mean the same thing. For either error
+// the remedy is a new estimate.
+//
+// It fails with [`WalletError::InsufficientFunds`] when the inputs do
+// not cover the fee and a payment of at least one zatoshi, or for a
+// transparent recipient the smallest output nodes relay. The other
+// arguments, the checks and the errors are those of `send`.
+func (_self *Wallet) SendMax(accountUuid string, seed []byte, address string, memo *[]byte, maxFee uint64, expectedAmount *uint64, minConfirmations *uint32) (SendMaxResult, error) {
+	_pointer := _self.ffiObject.incrementPointer("*Wallet")
+	defer _self.ffiObject.decrementPointer()
+	_uniffiRV, _uniffiErr := rustCallWithError[*WalletError](FfiConverterWalletError{}, func(_uniffiStatus *C.RustCallStatus) RustBufferI {
+		return GoRustBuffer{
+			inner: C.uniffi_zeclib_fn_method_wallet_send_max(
+				_pointer, FfiConverterStringINSTANCE.Lower(accountUuid), FfiConverterBytesINSTANCE.Lower(seed), FfiConverterStringINSTANCE.Lower(address), FfiConverterOptionalBytesINSTANCE.Lower(memo), FfiConverterUint64INSTANCE.Lower(maxFee), FfiConverterOptionalUint64INSTANCE.Lower(expectedAmount), FfiConverterOptionalUint32INSTANCE.Lower(minConfirmations), _uniffiStatus),
+		}
+	})
+	if _uniffiErr != nil {
+		var _uniffiDefaultValue SendMaxResult
+		return _uniffiDefaultValue, _uniffiErr
+	} else {
+		return FfiConverterSendMaxResultINSTANCE.Lift(_uniffiRV), nil
+	}
+}
 func (object *Wallet) Destroy() {
 	runtime.SetFinalizer(object, nil)
 	object.ffiObject.destroy()
@@ -1791,8 +2445,15 @@ func (_ FfiDestroyerAccount) Destroy(value Account) {
 type AccountBalance struct {
 	AccountUuid string
 	Ironwood    PoolBalance
+	// The regular transparent outputs: every transparent output whose
+	// transaction is not known to be a coinbase transaction.
 	Transparent PoolBalance
-	// The sum of the pool totals.
+	// The transparent outputs of coinbase transactions. A payment never
+	// spends them.
+	Coinbase PoolBalance
+	// The sum of the totals of the Ironwood pool, the regular transparent
+	// outputs and the coinbase outputs: everything the account holds,
+	// immature coinbase included.
 	Total uint64
 }
 
@@ -1800,6 +2461,7 @@ func (r *AccountBalance) Destroy() {
 	FfiDestroyerString{}.Destroy(r.AccountUuid)
 	FfiDestroyerPoolBalance{}.Destroy(r.Ironwood)
 	FfiDestroyerPoolBalance{}.Destroy(r.Transparent)
+	FfiDestroyerPoolBalance{}.Destroy(r.Coinbase)
 	FfiDestroyerUint64{}.Destroy(r.Total)
 }
 
@@ -1814,6 +2476,7 @@ func (c FfiConverterAccountBalance) Lift(rb RustBufferI) AccountBalance {
 func (c FfiConverterAccountBalance) Read(reader io.Reader) AccountBalance {
 	return AccountBalance{
 		FfiConverterStringINSTANCE.Read(reader),
+		FfiConverterPoolBalanceINSTANCE.Read(reader),
 		FfiConverterPoolBalanceINSTANCE.Read(reader),
 		FfiConverterPoolBalanceINSTANCE.Read(reader),
 		FfiConverterUint64INSTANCE.Read(reader),
@@ -1832,6 +2495,7 @@ func (c FfiConverterAccountBalance) Write(writer io.Writer, value AccountBalance
 	FfiConverterStringINSTANCE.Write(writer, value.AccountUuid)
 	FfiConverterPoolBalanceINSTANCE.Write(writer, value.Ironwood)
 	FfiConverterPoolBalanceINSTANCE.Write(writer, value.Transparent)
+	FfiConverterPoolBalanceINSTANCE.Write(writer, value.Coinbase)
 	FfiConverterUint64INSTANCE.Write(writer, value.Total)
 }
 
@@ -1925,6 +2589,190 @@ func (c FfiConverterActivationHeights) Write(writer io.Writer, value ActivationH
 type FfiDestroyerActivationHeights struct{}
 
 func (_ FfiDestroyerActivationHeights) Destroy(value ActivationHeights) {
+	value.Destroy()
+}
+
+// A transaction created by [`Wallet::send`].
+type CreatedTransaction struct {
+	// The transaction ID in the byte order of the wire.
+	Txid []byte
+	// The serialized transaction, or nothing if it could not be read back
+	// from the database after it was created (see [`SendResult`]).
+	Raw *[]byte
+}
+
+func (r *CreatedTransaction) Destroy() {
+	FfiDestroyerBytes{}.Destroy(r.Txid)
+	FfiDestroyerOptionalBytes{}.Destroy(r.Raw)
+}
+
+type FfiConverterCreatedTransaction struct{}
+
+var FfiConverterCreatedTransactionINSTANCE = FfiConverterCreatedTransaction{}
+
+func (c FfiConverterCreatedTransaction) Lift(rb RustBufferI) CreatedTransaction {
+	return LiftFromRustBuffer[CreatedTransaction](c, rb)
+}
+
+func (c FfiConverterCreatedTransaction) Read(reader io.Reader) CreatedTransaction {
+	return CreatedTransaction{
+		FfiConverterBytesINSTANCE.Read(reader),
+		FfiConverterOptionalBytesINSTANCE.Read(reader),
+	}
+}
+
+func (c FfiConverterCreatedTransaction) Lower(value CreatedTransaction) C.RustBuffer {
+	return LowerIntoRustBuffer[CreatedTransaction](c, value)
+}
+
+func (c FfiConverterCreatedTransaction) LowerExternal(value CreatedTransaction) ExternalCRustBuffer {
+	return RustBufferFromC(LowerIntoRustBuffer[CreatedTransaction](c, value))
+}
+
+func (c FfiConverterCreatedTransaction) Write(writer io.Writer, value CreatedTransaction) {
+	FfiConverterBytesINSTANCE.Write(writer, value.Txid)
+	FfiConverterOptionalBytesINSTANCE.Write(writer, value.Raw)
+}
+
+type FfiDestroyerCreatedTransaction struct{}
+
+func (_ FfiDestroyerCreatedTransaction) Destroy(value CreatedTransaction) {
+	value.Destroy()
+}
+
+// Spendable funds that one send max transaction could not take, because of
+// the limits on its inputs. Another transaction can send them now.
+type LeftBehind struct {
+	// The number and value, in zatoshis, of the spendable transparent
+	// outputs beyond the 1,333 one transaction spends. The smallest ones are
+	// left.
+	TransparentCount uint64
+	TransparentValue uint64
+	// The number and value of the spendable Ironwood notes beyond what the
+	// wallet's limit of Ironwood actions allows. The smallest ones are left.
+	NoteCount uint64
+	NoteValue uint64
+}
+
+func (r *LeftBehind) Destroy() {
+	FfiDestroyerUint64{}.Destroy(r.TransparentCount)
+	FfiDestroyerUint64{}.Destroy(r.TransparentValue)
+	FfiDestroyerUint64{}.Destroy(r.NoteCount)
+	FfiDestroyerUint64{}.Destroy(r.NoteValue)
+}
+
+type FfiConverterLeftBehind struct{}
+
+var FfiConverterLeftBehindINSTANCE = FfiConverterLeftBehind{}
+
+func (c FfiConverterLeftBehind) Lift(rb RustBufferI) LeftBehind {
+	return LiftFromRustBuffer[LeftBehind](c, rb)
+}
+
+func (c FfiConverterLeftBehind) Read(reader io.Reader) LeftBehind {
+	return LeftBehind{
+		FfiConverterUint64INSTANCE.Read(reader),
+		FfiConverterUint64INSTANCE.Read(reader),
+		FfiConverterUint64INSTANCE.Read(reader),
+		FfiConverterUint64INSTANCE.Read(reader),
+	}
+}
+
+func (c FfiConverterLeftBehind) Lower(value LeftBehind) C.RustBuffer {
+	return LowerIntoRustBuffer[LeftBehind](c, value)
+}
+
+func (c FfiConverterLeftBehind) LowerExternal(value LeftBehind) ExternalCRustBuffer {
+	return RustBufferFromC(LowerIntoRustBuffer[LeftBehind](c, value))
+}
+
+func (c FfiConverterLeftBehind) Write(writer io.Writer, value LeftBehind) {
+	FfiConverterUint64INSTANCE.Write(writer, value.TransparentCount)
+	FfiConverterUint64INSTANCE.Write(writer, value.TransparentValue)
+	FfiConverterUint64INSTANCE.Write(writer, value.NoteCount)
+	FfiConverterUint64INSTANCE.Write(writer, value.NoteValue)
+}
+
+type FfiDestroyerLeftBehind struct{}
+
+func (_ FfiDestroyerLeftBehind) Destroy(value LeftBehind) {
+	value.Destroy()
+}
+
+// What [`parse_address`] finds in an address.
+type ParsedAddress struct {
+	Kind AddressKind
+	// The receivers of a unified address, Orchard first, then Sapling, then
+	// transparent. Empty for any other kind.
+	Receivers []Receiver
+	// The expiry height and time of a unified address.
+	ExpiryHeight *uint32
+	ExpiryTime   *uint64
+	// Whether the wallet can pay the address. A payment to it lands in
+	// `paid_pool` and names `paid_address`, as a send would. When it cannot,
+	// `unpayable` says why. The expiry is not considered, because parsing
+	// knows neither the chain tip nor the time: a caller compares
+	// `expiry_height` with its tip and `expiry_time` with the clock.
+	Payable     bool
+	PaidPool    *PaidPool
+	PaidAddress *string
+	Unpayable   *string
+}
+
+func (r *ParsedAddress) Destroy() {
+	FfiDestroyerAddressKind{}.Destroy(r.Kind)
+	FfiDestroyerSequenceReceiver{}.Destroy(r.Receivers)
+	FfiDestroyerOptionalUint32{}.Destroy(r.ExpiryHeight)
+	FfiDestroyerOptionalUint64{}.Destroy(r.ExpiryTime)
+	FfiDestroyerBool{}.Destroy(r.Payable)
+	FfiDestroyerOptionalPaidPool{}.Destroy(r.PaidPool)
+	FfiDestroyerOptionalString{}.Destroy(r.PaidAddress)
+	FfiDestroyerOptionalString{}.Destroy(r.Unpayable)
+}
+
+type FfiConverterParsedAddress struct{}
+
+var FfiConverterParsedAddressINSTANCE = FfiConverterParsedAddress{}
+
+func (c FfiConverterParsedAddress) Lift(rb RustBufferI) ParsedAddress {
+	return LiftFromRustBuffer[ParsedAddress](c, rb)
+}
+
+func (c FfiConverterParsedAddress) Read(reader io.Reader) ParsedAddress {
+	return ParsedAddress{
+		FfiConverterAddressKindINSTANCE.Read(reader),
+		FfiConverterSequenceReceiverINSTANCE.Read(reader),
+		FfiConverterOptionalUint32INSTANCE.Read(reader),
+		FfiConverterOptionalUint64INSTANCE.Read(reader),
+		FfiConverterBoolINSTANCE.Read(reader),
+		FfiConverterOptionalPaidPoolINSTANCE.Read(reader),
+		FfiConverterOptionalStringINSTANCE.Read(reader),
+		FfiConverterOptionalStringINSTANCE.Read(reader),
+	}
+}
+
+func (c FfiConverterParsedAddress) Lower(value ParsedAddress) C.RustBuffer {
+	return LowerIntoRustBuffer[ParsedAddress](c, value)
+}
+
+func (c FfiConverterParsedAddress) LowerExternal(value ParsedAddress) ExternalCRustBuffer {
+	return RustBufferFromC(LowerIntoRustBuffer[ParsedAddress](c, value))
+}
+
+func (c FfiConverterParsedAddress) Write(writer io.Writer, value ParsedAddress) {
+	FfiConverterAddressKindINSTANCE.Write(writer, value.Kind)
+	FfiConverterSequenceReceiverINSTANCE.Write(writer, value.Receivers)
+	FfiConverterOptionalUint32INSTANCE.Write(writer, value.ExpiryHeight)
+	FfiConverterOptionalUint64INSTANCE.Write(writer, value.ExpiryTime)
+	FfiConverterBoolINSTANCE.Write(writer, value.Payable)
+	FfiConverterOptionalPaidPoolINSTANCE.Write(writer, value.PaidPool)
+	FfiConverterOptionalStringINSTANCE.Write(writer, value.PaidAddress)
+	FfiConverterOptionalStringINSTANCE.Write(writer, value.Unpayable)
+}
+
+type FfiDestroyerParsedAddress struct{}
+
+func (_ FfiDestroyerParsedAddress) Destroy(value ParsedAddress) {
 	value.Destroy()
 }
 
@@ -2045,6 +2893,57 @@ func (_ FfiDestroyerRatio) Destroy(value Ratio) {
 	value.Destroy()
 }
 
+// A receiver of a unified address.
+type Receiver struct {
+	Kind ReceiverKind
+	// An address a sender can pay this receiver at on its own, as the
+	// wallet itself names it when paying that receiver alone: the unified
+	// address reduced to the receiver and the address's expiry, or for a
+	// transparent receiver of an address without an expiry, the bare
+	// transparent address. Absent for a Sapling receiver, which the wallet
+	// does not pay.
+	Address *string
+}
+
+func (r *Receiver) Destroy() {
+	FfiDestroyerReceiverKind{}.Destroy(r.Kind)
+	FfiDestroyerOptionalString{}.Destroy(r.Address)
+}
+
+type FfiConverterReceiver struct{}
+
+var FfiConverterReceiverINSTANCE = FfiConverterReceiver{}
+
+func (c FfiConverterReceiver) Lift(rb RustBufferI) Receiver {
+	return LiftFromRustBuffer[Receiver](c, rb)
+}
+
+func (c FfiConverterReceiver) Read(reader io.Reader) Receiver {
+	return Receiver{
+		FfiConverterReceiverKindINSTANCE.Read(reader),
+		FfiConverterOptionalStringINSTANCE.Read(reader),
+	}
+}
+
+func (c FfiConverterReceiver) Lower(value Receiver) C.RustBuffer {
+	return LowerIntoRustBuffer[Receiver](c, value)
+}
+
+func (c FfiConverterReceiver) LowerExternal(value Receiver) ExternalCRustBuffer {
+	return RustBufferFromC(LowerIntoRustBuffer[Receiver](c, value))
+}
+
+func (c FfiConverterReceiver) Write(writer io.Writer, value Receiver) {
+	FfiConverterReceiverKindINSTANCE.Write(writer, value.Kind)
+	FfiConverterOptionalStringINSTANCE.Write(writer, value.Address)
+}
+
+type FfiDestroyerReceiver struct{}
+
+func (_ FfiDestroyerReceiver) Destroy(value Receiver) {
+	value.Destroy()
+}
+
 // A range of block heights to scan, from `start` up to but excluding `end`.
 type ScanRange struct {
 	Start    uint32
@@ -2145,6 +3044,234 @@ func (_ FfiDestroyerScanSummary) Destroy(value ScanSummary) {
 	value.Destroy()
 }
 
+// The result of [`Wallet::estimate_send_max`].
+type SendMaxEstimate struct {
+	// The amount the recipient would get and the fee, in zatoshis.
+	Amount uint64
+	Fee    uint64
+	// The address the payment would name and the pool it would land in.
+	PaidAddress string
+	PaidPool    PaidPool
+	LeftBehind  LeftBehind
+}
+
+func (r *SendMaxEstimate) Destroy() {
+	FfiDestroyerUint64{}.Destroy(r.Amount)
+	FfiDestroyerUint64{}.Destroy(r.Fee)
+	FfiDestroyerString{}.Destroy(r.PaidAddress)
+	FfiDestroyerPaidPool{}.Destroy(r.PaidPool)
+	FfiDestroyerLeftBehind{}.Destroy(r.LeftBehind)
+}
+
+type FfiConverterSendMaxEstimate struct{}
+
+var FfiConverterSendMaxEstimateINSTANCE = FfiConverterSendMaxEstimate{}
+
+func (c FfiConverterSendMaxEstimate) Lift(rb RustBufferI) SendMaxEstimate {
+	return LiftFromRustBuffer[SendMaxEstimate](c, rb)
+}
+
+func (c FfiConverterSendMaxEstimate) Read(reader io.Reader) SendMaxEstimate {
+	return SendMaxEstimate{
+		FfiConverterUint64INSTANCE.Read(reader),
+		FfiConverterUint64INSTANCE.Read(reader),
+		FfiConverterStringINSTANCE.Read(reader),
+		FfiConverterPaidPoolINSTANCE.Read(reader),
+		FfiConverterLeftBehindINSTANCE.Read(reader),
+	}
+}
+
+func (c FfiConverterSendMaxEstimate) Lower(value SendMaxEstimate) C.RustBuffer {
+	return LowerIntoRustBuffer[SendMaxEstimate](c, value)
+}
+
+func (c FfiConverterSendMaxEstimate) LowerExternal(value SendMaxEstimate) ExternalCRustBuffer {
+	return RustBufferFromC(LowerIntoRustBuffer[SendMaxEstimate](c, value))
+}
+
+func (c FfiConverterSendMaxEstimate) Write(writer io.Writer, value SendMaxEstimate) {
+	FfiConverterUint64INSTANCE.Write(writer, value.Amount)
+	FfiConverterUint64INSTANCE.Write(writer, value.Fee)
+	FfiConverterStringINSTANCE.Write(writer, value.PaidAddress)
+	FfiConverterPaidPoolINSTANCE.Write(writer, value.PaidPool)
+	FfiConverterLeftBehindINSTANCE.Write(writer, value.LeftBehind)
+}
+
+type FfiDestroyerSendMaxEstimate struct{}
+
+func (_ FfiDestroyerSendMaxEstimate) Destroy(value SendMaxEstimate) {
+	value.Destroy()
+}
+
+// The result of [`Wallet::send_max`].
+type SendMaxResult struct {
+	// The created transactions, the fee and the paid address, as for a
+	// send.
+	Result SendResult
+	// The amount the recipient gets, in zatoshis.
+	Amount     uint64
+	LeftBehind LeftBehind
+}
+
+func (r *SendMaxResult) Destroy() {
+	FfiDestroyerSendResult{}.Destroy(r.Result)
+	FfiDestroyerUint64{}.Destroy(r.Amount)
+	FfiDestroyerLeftBehind{}.Destroy(r.LeftBehind)
+}
+
+type FfiConverterSendMaxResult struct{}
+
+var FfiConverterSendMaxResultINSTANCE = FfiConverterSendMaxResult{}
+
+func (c FfiConverterSendMaxResult) Lift(rb RustBufferI) SendMaxResult {
+	return LiftFromRustBuffer[SendMaxResult](c, rb)
+}
+
+func (c FfiConverterSendMaxResult) Read(reader io.Reader) SendMaxResult {
+	return SendMaxResult{
+		FfiConverterSendResultINSTANCE.Read(reader),
+		FfiConverterUint64INSTANCE.Read(reader),
+		FfiConverterLeftBehindINSTANCE.Read(reader),
+	}
+}
+
+func (c FfiConverterSendMaxResult) Lower(value SendMaxResult) C.RustBuffer {
+	return LowerIntoRustBuffer[SendMaxResult](c, value)
+}
+
+func (c FfiConverterSendMaxResult) LowerExternal(value SendMaxResult) ExternalCRustBuffer {
+	return RustBufferFromC(LowerIntoRustBuffer[SendMaxResult](c, value))
+}
+
+func (c FfiConverterSendMaxResult) Write(writer io.Writer, value SendMaxResult) {
+	FfiConverterSendResultINSTANCE.Write(writer, value.Result)
+	FfiConverterUint64INSTANCE.Write(writer, value.Amount)
+	FfiConverterLeftBehindINSTANCE.Write(writer, value.LeftBehind)
+}
+
+type FfiDestroyerSendMaxResult struct{}
+
+func (_ FfiDestroyerSendMaxResult) Destroy(value SendMaxResult) {
+	value.Destroy()
+}
+
+// The result of [`Wallet::send`].
+type SendResult struct {
+	// The created transactions, in the order they are to be broadcast.
+	Transactions []CreatedTransaction
+	// The total fee in zatoshis.
+	Fee uint64
+	// The address the payment names, which the wallet stores as the
+	// recipient of the output: the given address, or for a unified address
+	// without an Orchard receiver, its transparent receiver.
+	PaidAddress string
+	// The pool the payment lands in.
+	PaidPool PaidPool
+	// Why a raw transaction is missing from `transactions`, if one is. The
+	// transactions exist and are stored in the wallet either way, and the
+	// rebroadcast inventory reads them from the database.
+	ReadError *string
+}
+
+func (r *SendResult) Destroy() {
+	FfiDestroyerSequenceCreatedTransaction{}.Destroy(r.Transactions)
+	FfiDestroyerUint64{}.Destroy(r.Fee)
+	FfiDestroyerString{}.Destroy(r.PaidAddress)
+	FfiDestroyerPaidPool{}.Destroy(r.PaidPool)
+	FfiDestroyerOptionalString{}.Destroy(r.ReadError)
+}
+
+type FfiConverterSendResult struct{}
+
+var FfiConverterSendResultINSTANCE = FfiConverterSendResult{}
+
+func (c FfiConverterSendResult) Lift(rb RustBufferI) SendResult {
+	return LiftFromRustBuffer[SendResult](c, rb)
+}
+
+func (c FfiConverterSendResult) Read(reader io.Reader) SendResult {
+	return SendResult{
+		FfiConverterSequenceCreatedTransactionINSTANCE.Read(reader),
+		FfiConverterUint64INSTANCE.Read(reader),
+		FfiConverterStringINSTANCE.Read(reader),
+		FfiConverterPaidPoolINSTANCE.Read(reader),
+		FfiConverterOptionalStringINSTANCE.Read(reader),
+	}
+}
+
+func (c FfiConverterSendResult) Lower(value SendResult) C.RustBuffer {
+	return LowerIntoRustBuffer[SendResult](c, value)
+}
+
+func (c FfiConverterSendResult) LowerExternal(value SendResult) ExternalCRustBuffer {
+	return RustBufferFromC(LowerIntoRustBuffer[SendResult](c, value))
+}
+
+func (c FfiConverterSendResult) Write(writer io.Writer, value SendResult) {
+	FfiConverterSequenceCreatedTransactionINSTANCE.Write(writer, value.Transactions)
+	FfiConverterUint64INSTANCE.Write(writer, value.Fee)
+	FfiConverterStringINSTANCE.Write(writer, value.PaidAddress)
+	FfiConverterPaidPoolINSTANCE.Write(writer, value.PaidPool)
+	FfiConverterOptionalStringINSTANCE.Write(writer, value.ReadError)
+}
+
+type FfiDestroyerSendResult struct{}
+
+func (_ FfiDestroyerSendResult) Destroy(value SendResult) {
+	value.Destroy()
+}
+
+// The value an account can spend now, in zatoshis.
+type SpendableValue struct {
+	// The value of the Ironwood notes a send can select.
+	Ironwood uint64
+	// The value of the transparent outputs a send can select: outputs of
+	// more than 5,000 zatoshis that are not coinbase outputs. Input
+	// selection takes at most 1,333 of them into one transaction. The cap
+	// is the selector's default, 10% of the block space at 150 bytes per
+	// input, and not a rule of the chain.
+	Transparent uint64
+}
+
+func (r *SpendableValue) Destroy() {
+	FfiDestroyerUint64{}.Destroy(r.Ironwood)
+	FfiDestroyerUint64{}.Destroy(r.Transparent)
+}
+
+type FfiConverterSpendableValue struct{}
+
+var FfiConverterSpendableValueINSTANCE = FfiConverterSpendableValue{}
+
+func (c FfiConverterSpendableValue) Lift(rb RustBufferI) SpendableValue {
+	return LiftFromRustBuffer[SpendableValue](c, rb)
+}
+
+func (c FfiConverterSpendableValue) Read(reader io.Reader) SpendableValue {
+	return SpendableValue{
+		FfiConverterUint64INSTANCE.Read(reader),
+		FfiConverterUint64INSTANCE.Read(reader),
+	}
+}
+
+func (c FfiConverterSpendableValue) Lower(value SpendableValue) C.RustBuffer {
+	return LowerIntoRustBuffer[SpendableValue](c, value)
+}
+
+func (c FfiConverterSpendableValue) LowerExternal(value SpendableValue) ExternalCRustBuffer {
+	return RustBufferFromC(LowerIntoRustBuffer[SpendableValue](c, value))
+}
+
+func (c FfiConverterSpendableValue) Write(writer io.Writer, value SpendableValue) {
+	FfiConverterUint64INSTANCE.Write(writer, value.Ironwood)
+	FfiConverterUint64INSTANCE.Write(writer, value.Transparent)
+}
+
+type FfiDestroyerSpendableValue struct{}
+
+func (_ FfiDestroyerSpendableValue) Destroy(value SpendableValue) {
+	value.Destroy()
+}
+
 // The root of one completed subtree of a note commitment tree.
 type SubtreeRoot struct {
 	// The 32-byte root hash.
@@ -2189,6 +3316,425 @@ func (c FfiConverterSubtreeRoot) Write(writer io.Writer, value SubtreeRoot) {
 type FfiDestroyerSubtreeRoot struct{}
 
 func (_ FfiDestroyerSubtreeRoot) Destroy(value SubtreeRoot) {
+	value.Destroy()
+}
+
+// The result of [`Wallet::estimate_transfer`].
+type TransferEstimate struct {
+	// The fee in zatoshis.
+	Fee uint64
+	// The address the payment would name, as in [`SendResult`].
+	PaidAddress string
+	// The pool the payment would land in.
+	PaidPool PaidPool
+}
+
+func (r *TransferEstimate) Destroy() {
+	FfiDestroyerUint64{}.Destroy(r.Fee)
+	FfiDestroyerString{}.Destroy(r.PaidAddress)
+	FfiDestroyerPaidPool{}.Destroy(r.PaidPool)
+}
+
+type FfiConverterTransferEstimate struct{}
+
+var FfiConverterTransferEstimateINSTANCE = FfiConverterTransferEstimate{}
+
+func (c FfiConverterTransferEstimate) Lift(rb RustBufferI) TransferEstimate {
+	return LiftFromRustBuffer[TransferEstimate](c, rb)
+}
+
+func (c FfiConverterTransferEstimate) Read(reader io.Reader) TransferEstimate {
+	return TransferEstimate{
+		FfiConverterUint64INSTANCE.Read(reader),
+		FfiConverterStringINSTANCE.Read(reader),
+		FfiConverterPaidPoolINSTANCE.Read(reader),
+	}
+}
+
+func (c FfiConverterTransferEstimate) Lower(value TransferEstimate) C.RustBuffer {
+	return LowerIntoRustBuffer[TransferEstimate](c, value)
+}
+
+func (c FfiConverterTransferEstimate) LowerExternal(value TransferEstimate) ExternalCRustBuffer {
+	return RustBufferFromC(LowerIntoRustBuffer[TransferEstimate](c, value))
+}
+
+func (c FfiConverterTransferEstimate) Write(writer io.Writer, value TransferEstimate) {
+	FfiConverterUint64INSTANCE.Write(writer, value.Fee)
+	FfiConverterStringINSTANCE.Write(writer, value.PaidAddress)
+	FfiConverterPaidPoolINSTANCE.Write(writer, value.PaidPool)
+}
+
+type FfiDestroyerTransferEstimate struct{}
+
+func (_ FfiDestroyerTransferEstimate) Destroy(value TransferEstimate) {
+	value.Destroy()
+}
+
+// Transactions of an account's history, with the chain tip the wallet knew
+// when it read them, against which a caller counts confirmations.
+type TxListing struct {
+	ChainTip *uint32
+	Records  []TxRecord
+}
+
+func (r *TxListing) Destroy() {
+	FfiDestroyerOptionalUint32{}.Destroy(r.ChainTip)
+	FfiDestroyerSequenceTxRecord{}.Destroy(r.Records)
+}
+
+type FfiConverterTxListing struct{}
+
+var FfiConverterTxListingINSTANCE = FfiConverterTxListing{}
+
+func (c FfiConverterTxListing) Lift(rb RustBufferI) TxListing {
+	return LiftFromRustBuffer[TxListing](c, rb)
+}
+
+func (c FfiConverterTxListing) Read(reader io.Reader) TxListing {
+	return TxListing{
+		FfiConverterOptionalUint32INSTANCE.Read(reader),
+		FfiConverterSequenceTxRecordINSTANCE.Read(reader),
+	}
+}
+
+func (c FfiConverterTxListing) Lower(value TxListing) C.RustBuffer {
+	return LowerIntoRustBuffer[TxListing](c, value)
+}
+
+func (c FfiConverterTxListing) LowerExternal(value TxListing) ExternalCRustBuffer {
+	return RustBufferFromC(LowerIntoRustBuffer[TxListing](c, value))
+}
+
+func (c FfiConverterTxListing) Write(writer io.Writer, value TxListing) {
+	FfiConverterOptionalUint32INSTANCE.Write(writer, value.ChainTip)
+	FfiConverterSequenceTxRecordINSTANCE.Write(writer, value.Records)
+}
+
+type FfiDestroyerTxListing struct{}
+
+func (_ FfiDestroyerTxListing) Destroy(value TxListing) {
+	value.Destroy()
+}
+
+// One transaction of an account's history, if the account has it, with the
+// chain tip the wallet knew when it read it.
+type TxLookup struct {
+	ChainTip *uint32
+	Record   *TxRecord
+}
+
+func (r *TxLookup) Destroy() {
+	FfiDestroyerOptionalUint32{}.Destroy(r.ChainTip)
+	FfiDestroyerOptionalTxRecord{}.Destroy(r.Record)
+}
+
+type FfiConverterTxLookup struct{}
+
+var FfiConverterTxLookupINSTANCE = FfiConverterTxLookup{}
+
+func (c FfiConverterTxLookup) Lift(rb RustBufferI) TxLookup {
+	return LiftFromRustBuffer[TxLookup](c, rb)
+}
+
+func (c FfiConverterTxLookup) Read(reader io.Reader) TxLookup {
+	return TxLookup{
+		FfiConverterOptionalUint32INSTANCE.Read(reader),
+		FfiConverterOptionalTxRecordINSTANCE.Read(reader),
+	}
+}
+
+func (c FfiConverterTxLookup) Lower(value TxLookup) C.RustBuffer {
+	return LowerIntoRustBuffer[TxLookup](c, value)
+}
+
+func (c FfiConverterTxLookup) LowerExternal(value TxLookup) ExternalCRustBuffer {
+	return RustBufferFromC(LowerIntoRustBuffer[TxLookup](c, value))
+}
+
+func (c FfiConverterTxLookup) Write(writer io.Writer, value TxLookup) {
+	FfiConverterOptionalUint32INSTANCE.Write(writer, value.ChainTip)
+	FfiConverterOptionalTxRecordINSTANCE.Write(writer, value.Record)
+}
+
+type FfiDestroyerTxLookup struct{}
+
+func (_ FfiDestroyerTxLookup) Destroy(value TxLookup) {
+	value.Destroy()
+}
+
+// An output of a transaction in the history: one that the account sent or
+// received.
+type TxOutput struct {
+	Pool        OutputPool
+	OutputIndex uint32
+	// The value in zatoshis.
+	Value uint64
+	// The address the output pays, when the wallet knows it. For an output
+	// of a transaction this wallet created, the address the payment named.
+	// For an output to the wallet in a transaction this wallet did not
+	// create (a payment received, or one another instance of the same seed
+	// made, as a restored wallet sees it), the receiver that was paid, as an
+	// address a sender could pay on its own: for an Orchard or Ironwood
+	// output the wallet's unified address pruned to its Orchard receiver,
+	// for a transparent output the bare transparent address. Such an address
+	// is not necessarily the string the wallet handed out, and it never has
+	// a Sapling receiver. A payment this wallet created to its own address
+	// keeps the address it named, which can have a Sapling receiver when the
+	// user paid that form. It is unknown for change and for a received
+	// output whose address the wallet did not generate.
+	//
+	// What a payment named is known only to the database that created it.
+	// For an Orchard or Ironwood output, the creating wallet records a
+	// payment to itself under the address the payment named, and a restored
+	// wallet records the same payment under the Orchard-only receiver: the
+	// same receiver, a different string. A transparent output is the
+	// t-address on both. A payment to someone else likewise: the creating
+	// wallet has the address named, a restored one the receiver its viewing
+	// key recovers.
+	Address *string
+	// Whether the output pays one of the wallet's accounts.
+	ToWallet bool
+	// Whether the output is change: set for every output to the account
+	// of a transaction the account funded, which includes a payment to one
+	// of its own addresses. Such a payment carries the address it was made
+	// to, and change carries none.
+	IsChange bool
+	// The memo of a shielded output, absent for a transparent one. A single
+	// 0xF6 byte is the empty memo.
+	Memo *[]byte
+}
+
+func (r *TxOutput) Destroy() {
+	FfiDestroyerOutputPool{}.Destroy(r.Pool)
+	FfiDestroyerUint32{}.Destroy(r.OutputIndex)
+	FfiDestroyerUint64{}.Destroy(r.Value)
+	FfiDestroyerOptionalString{}.Destroy(r.Address)
+	FfiDestroyerBool{}.Destroy(r.ToWallet)
+	FfiDestroyerBool{}.Destroy(r.IsChange)
+	FfiDestroyerOptionalBytes{}.Destroy(r.Memo)
+}
+
+type FfiConverterTxOutput struct{}
+
+var FfiConverterTxOutputINSTANCE = FfiConverterTxOutput{}
+
+func (c FfiConverterTxOutput) Lift(rb RustBufferI) TxOutput {
+	return LiftFromRustBuffer[TxOutput](c, rb)
+}
+
+func (c FfiConverterTxOutput) Read(reader io.Reader) TxOutput {
+	return TxOutput{
+		FfiConverterOutputPoolINSTANCE.Read(reader),
+		FfiConverterUint32INSTANCE.Read(reader),
+		FfiConverterUint64INSTANCE.Read(reader),
+		FfiConverterOptionalStringINSTANCE.Read(reader),
+		FfiConverterBoolINSTANCE.Read(reader),
+		FfiConverterBoolINSTANCE.Read(reader),
+		FfiConverterOptionalBytesINSTANCE.Read(reader),
+	}
+}
+
+func (c FfiConverterTxOutput) Lower(value TxOutput) C.RustBuffer {
+	return LowerIntoRustBuffer[TxOutput](c, value)
+}
+
+func (c FfiConverterTxOutput) LowerExternal(value TxOutput) ExternalCRustBuffer {
+	return RustBufferFromC(LowerIntoRustBuffer[TxOutput](c, value))
+}
+
+func (c FfiConverterTxOutput) Write(writer io.Writer, value TxOutput) {
+	FfiConverterOutputPoolINSTANCE.Write(writer, value.Pool)
+	FfiConverterUint32INSTANCE.Write(writer, value.OutputIndex)
+	FfiConverterUint64INSTANCE.Write(writer, value.Value)
+	FfiConverterOptionalStringINSTANCE.Write(writer, value.Address)
+	FfiConverterBoolINSTANCE.Write(writer, value.ToWallet)
+	FfiConverterBoolINSTANCE.Write(writer, value.IsChange)
+	FfiConverterOptionalBytesINSTANCE.Write(writer, value.Memo)
+}
+
+type FfiDestroyerTxOutput struct{}
+
+func (_ FfiDestroyerTxOutput) Destroy(value TxOutput) {
+	value.Destroy()
+}
+
+// A transaction in an account's history.
+type TxRecord struct {
+	// The position of the transaction in the order the wallet discovered
+	// transactions. It grows with discovery, not with height: a restore can
+	// find an old transaction late.
+	Seq uint64
+	// The transaction ID in the byte order of the wire.
+	Txid []byte
+	// The height and time of the block that mined it, absent while it is
+	// unmined.
+	MinedHeight *uint32
+	BlockTime   *uint64
+	// The last height at which it can be mined, zero if it does not expire,
+	// and absent when the wallet does not know it: for a transaction it only
+	// saw an output of in a compact block or an unspent-output reply.
+	ExpiryHeight *uint32
+	// Whether it is unmined and its expiry height is at or below the
+	// wallet's greatest scanned height. It is reliable only once the wallet
+	// is scanned to the tip: before, it can lag, and with blocks scanned out
+	// of order the greatest scanned height can be near the tip while the
+	// block that mined the transaction is not scanned yet, so a mined
+	// transaction can show as expired. False when the expiry is unknown.
+	ExpiredUnmined bool
+	// Whether this wallet created the transaction.
+	CreatedByWallet bool
+	// The change of the account's balance, in zatoshis.
+	BalanceDelta int64
+	// The value of the account's inputs the transaction spent, and of its
+	// outputs that pay the account, in zatoshis.
+	TotalSpent    uint64
+	TotalReceived uint64
+	// Whether the wallet holds the full transaction. Without it, a
+	// transaction found by scanning shows only what compact blocks tell:
+	// the account's spent notes and its own outputs. A transaction another
+	// instance of the same seed created then looks like a payment to
+	// itself, and its outside output, recipient and fee appear once the
+	// full transaction is stored.
+	RawPresent bool
+	// The fee of the transaction in zatoshis, whoever paid it: on a
+	// receive it is the sender's. Absent while it is unknown. It is unknown when
+	// the transaction spends transparent inputs whose values the wallet does
+	// not know, such as a payment to the wallet from someone else's
+	// transparent outputs, and can stay unknown.
+	Fee *uint64
+	// Whether the transaction only moved the account's transparent funds
+	// into a shielded pool.
+	IsShielding bool
+	// The outputs the account sent or received, in output order.
+	Outputs []TxOutput
+}
+
+func (r *TxRecord) Destroy() {
+	FfiDestroyerUint64{}.Destroy(r.Seq)
+	FfiDestroyerBytes{}.Destroy(r.Txid)
+	FfiDestroyerOptionalUint32{}.Destroy(r.MinedHeight)
+	FfiDestroyerOptionalUint64{}.Destroy(r.BlockTime)
+	FfiDestroyerOptionalUint32{}.Destroy(r.ExpiryHeight)
+	FfiDestroyerBool{}.Destroy(r.ExpiredUnmined)
+	FfiDestroyerBool{}.Destroy(r.CreatedByWallet)
+	FfiDestroyerInt64{}.Destroy(r.BalanceDelta)
+	FfiDestroyerUint64{}.Destroy(r.TotalSpent)
+	FfiDestroyerUint64{}.Destroy(r.TotalReceived)
+	FfiDestroyerBool{}.Destroy(r.RawPresent)
+	FfiDestroyerOptionalUint64{}.Destroy(r.Fee)
+	FfiDestroyerBool{}.Destroy(r.IsShielding)
+	FfiDestroyerSequenceTxOutput{}.Destroy(r.Outputs)
+}
+
+type FfiConverterTxRecord struct{}
+
+var FfiConverterTxRecordINSTANCE = FfiConverterTxRecord{}
+
+func (c FfiConverterTxRecord) Lift(rb RustBufferI) TxRecord {
+	return LiftFromRustBuffer[TxRecord](c, rb)
+}
+
+func (c FfiConverterTxRecord) Read(reader io.Reader) TxRecord {
+	return TxRecord{
+		FfiConverterUint64INSTANCE.Read(reader),
+		FfiConverterBytesINSTANCE.Read(reader),
+		FfiConverterOptionalUint32INSTANCE.Read(reader),
+		FfiConverterOptionalUint64INSTANCE.Read(reader),
+		FfiConverterOptionalUint32INSTANCE.Read(reader),
+		FfiConverterBoolINSTANCE.Read(reader),
+		FfiConverterBoolINSTANCE.Read(reader),
+		FfiConverterInt64INSTANCE.Read(reader),
+		FfiConverterUint64INSTANCE.Read(reader),
+		FfiConverterUint64INSTANCE.Read(reader),
+		FfiConverterBoolINSTANCE.Read(reader),
+		FfiConverterOptionalUint64INSTANCE.Read(reader),
+		FfiConverterBoolINSTANCE.Read(reader),
+		FfiConverterSequenceTxOutputINSTANCE.Read(reader),
+	}
+}
+
+func (c FfiConverterTxRecord) Lower(value TxRecord) C.RustBuffer {
+	return LowerIntoRustBuffer[TxRecord](c, value)
+}
+
+func (c FfiConverterTxRecord) LowerExternal(value TxRecord) ExternalCRustBuffer {
+	return RustBufferFromC(LowerIntoRustBuffer[TxRecord](c, value))
+}
+
+func (c FfiConverterTxRecord) Write(writer io.Writer, value TxRecord) {
+	FfiConverterUint64INSTANCE.Write(writer, value.Seq)
+	FfiConverterBytesINSTANCE.Write(writer, value.Txid)
+	FfiConverterOptionalUint32INSTANCE.Write(writer, value.MinedHeight)
+	FfiConverterOptionalUint64INSTANCE.Write(writer, value.BlockTime)
+	FfiConverterOptionalUint32INSTANCE.Write(writer, value.ExpiryHeight)
+	FfiConverterBoolINSTANCE.Write(writer, value.ExpiredUnmined)
+	FfiConverterBoolINSTANCE.Write(writer, value.CreatedByWallet)
+	FfiConverterInt64INSTANCE.Write(writer, value.BalanceDelta)
+	FfiConverterUint64INSTANCE.Write(writer, value.TotalSpent)
+	FfiConverterUint64INSTANCE.Write(writer, value.TotalReceived)
+	FfiConverterBoolINSTANCE.Write(writer, value.RawPresent)
+	FfiConverterOptionalUint64INSTANCE.Write(writer, value.Fee)
+	FfiConverterBoolINSTANCE.Write(writer, value.IsShielding)
+	FfiConverterSequenceTxOutputINSTANCE.Write(writer, value.Outputs)
+}
+
+type FfiDestroyerTxRecord struct{}
+
+func (_ FfiDestroyerTxRecord) Destroy(value TxRecord) {
+	value.Destroy()
+}
+
+// A transaction the wallet created that is neither mined nor expired.
+type UnminedTransaction struct {
+	// The transaction ID in the byte order of the wire.
+	Txid []byte
+	// The serialized transaction.
+	Raw []byte
+	// The last height at which the transaction can be mined. Zero means it
+	// does not expire.
+	ExpiryHeight uint32
+}
+
+func (r *UnminedTransaction) Destroy() {
+	FfiDestroyerBytes{}.Destroy(r.Txid)
+	FfiDestroyerBytes{}.Destroy(r.Raw)
+	FfiDestroyerUint32{}.Destroy(r.ExpiryHeight)
+}
+
+type FfiConverterUnminedTransaction struct{}
+
+var FfiConverterUnminedTransactionINSTANCE = FfiConverterUnminedTransaction{}
+
+func (c FfiConverterUnminedTransaction) Lift(rb RustBufferI) UnminedTransaction {
+	return LiftFromRustBuffer[UnminedTransaction](c, rb)
+}
+
+func (c FfiConverterUnminedTransaction) Read(reader io.Reader) UnminedTransaction {
+	return UnminedTransaction{
+		FfiConverterBytesINSTANCE.Read(reader),
+		FfiConverterBytesINSTANCE.Read(reader),
+		FfiConverterUint32INSTANCE.Read(reader),
+	}
+}
+
+func (c FfiConverterUnminedTransaction) Lower(value UnminedTransaction) C.RustBuffer {
+	return LowerIntoRustBuffer[UnminedTransaction](c, value)
+}
+
+func (c FfiConverterUnminedTransaction) LowerExternal(value UnminedTransaction) ExternalCRustBuffer {
+	return RustBufferFromC(LowerIntoRustBuffer[UnminedTransaction](c, value))
+}
+
+func (c FfiConverterUnminedTransaction) Write(writer io.Writer, value UnminedTransaction) {
+	FfiConverterBytesINSTANCE.Write(writer, value.Txid)
+	FfiConverterBytesINSTANCE.Write(writer, value.Raw)
+	FfiConverterUint32INSTANCE.Write(writer, value.ExpiryHeight)
+}
+
+type FfiDestroyerUnminedTransaction struct{}
+
+func (_ FfiDestroyerUnminedTransaction) Destroy(value UnminedTransaction) {
 	value.Destroy()
 }
 
@@ -2389,6 +3935,46 @@ func (_ FfiDestroyerWatchedAddress) Destroy(value WatchedAddress) {
 	value.Destroy()
 }
 
+// The kind of an address.
+type AddressKind uint
+
+const (
+	AddressKindTransparent AddressKind = 1
+	AddressKindUnified     AddressKind = 2
+	AddressKindSapling     AddressKind = 3
+	// A ZIP 320 transparent-source-only address.
+	AddressKindTex AddressKind = 4
+)
+
+type FfiConverterAddressKind struct{}
+
+var FfiConverterAddressKindINSTANCE = FfiConverterAddressKind{}
+
+func (c FfiConverterAddressKind) Lift(rb RustBufferI) AddressKind {
+	return LiftFromRustBuffer[AddressKind](c, rb)
+}
+
+func (c FfiConverterAddressKind) Lower(value AddressKind) C.RustBuffer {
+	return LowerIntoRustBuffer[AddressKind](c, value)
+}
+
+func (c FfiConverterAddressKind) LowerExternal(value AddressKind) ExternalCRustBuffer {
+	return RustBufferFromC(LowerIntoRustBuffer[AddressKind](c, value))
+}
+func (FfiConverterAddressKind) Read(reader io.Reader) AddressKind {
+	id := readInt32(reader)
+	return AddressKind(id)
+}
+
+func (FfiConverterAddressKind) Write(writer io.Writer, value AddressKind) {
+	writeInt32(writer, int32(value))
+}
+
+type FfiDestroyerAddressKind struct{}
+
+func (_ FfiDestroyerAddressKind) Destroy(value AddressKind) {
+}
+
 // The Zcash network a wallet belongs to.
 type Network interface {
 	Destroy()
@@ -2466,6 +4052,45 @@ func (_ FfiDestroyerNetwork) Destroy(value Network) {
 	value.Destroy()
 }
 
+// The pool of a transaction output.
+type OutputPool uint
+
+const (
+	OutputPoolTransparent OutputPool = 1
+	OutputPoolSapling     OutputPool = 2
+	OutputPoolOrchard     OutputPool = 3
+	OutputPoolIronwood    OutputPool = 4
+)
+
+type FfiConverterOutputPool struct{}
+
+var FfiConverterOutputPoolINSTANCE = FfiConverterOutputPool{}
+
+func (c FfiConverterOutputPool) Lift(rb RustBufferI) OutputPool {
+	return LiftFromRustBuffer[OutputPool](c, rb)
+}
+
+func (c FfiConverterOutputPool) Lower(value OutputPool) C.RustBuffer {
+	return LowerIntoRustBuffer[OutputPool](c, value)
+}
+
+func (c FfiConverterOutputPool) LowerExternal(value OutputPool) ExternalCRustBuffer {
+	return RustBufferFromC(LowerIntoRustBuffer[OutputPool](c, value))
+}
+func (FfiConverterOutputPool) Read(reader io.Reader) OutputPool {
+	id := readInt32(reader)
+	return OutputPool(id)
+}
+
+func (FfiConverterOutputPool) Write(writer io.Writer, value OutputPool) {
+	writeInt32(writer, int32(value))
+}
+
+type FfiDestroyerOutputPool struct{}
+
+func (_ FfiDestroyerOutputPool) Destroy(value OutputPool) {
+}
+
 // Which outputs a request for an address's transactions covers.
 type OutputStatusFilter uint
 
@@ -2501,6 +4126,85 @@ func (FfiConverterOutputStatusFilter) Write(writer io.Writer, value OutputStatus
 type FfiDestroyerOutputStatusFilter struct{}
 
 func (_ FfiDestroyerOutputStatusFilter) Destroy(value OutputStatusFilter) {
+}
+
+// The pool a payment lands in.
+type PaidPool uint
+
+const (
+	// An Orchard receiver, paid in the Ironwood pool from NU6.3 on.
+	PaidPoolIronwood PaidPool = 1
+	// A transparent receiver.
+	PaidPoolTransparent PaidPool = 2
+)
+
+type FfiConverterPaidPool struct{}
+
+var FfiConverterPaidPoolINSTANCE = FfiConverterPaidPool{}
+
+func (c FfiConverterPaidPool) Lift(rb RustBufferI) PaidPool {
+	return LiftFromRustBuffer[PaidPool](c, rb)
+}
+
+func (c FfiConverterPaidPool) Lower(value PaidPool) C.RustBuffer {
+	return LowerIntoRustBuffer[PaidPool](c, value)
+}
+
+func (c FfiConverterPaidPool) LowerExternal(value PaidPool) ExternalCRustBuffer {
+	return RustBufferFromC(LowerIntoRustBuffer[PaidPool](c, value))
+}
+func (FfiConverterPaidPool) Read(reader io.Reader) PaidPool {
+	id := readInt32(reader)
+	return PaidPool(id)
+}
+
+func (FfiConverterPaidPool) Write(writer io.Writer, value PaidPool) {
+	writeInt32(writer, int32(value))
+}
+
+type FfiDestroyerPaidPool struct{}
+
+func (_ FfiDestroyerPaidPool) Destroy(value PaidPool) {
+}
+
+// The kind of a receiver of a unified address.
+type ReceiverKind uint
+
+const (
+	// An Orchard receiver, which receives into the Ironwood pool from NU6.3
+	// on.
+	ReceiverKindOrchard     ReceiverKind = 1
+	ReceiverKindSapling     ReceiverKind = 2
+	ReceiverKindTransparent ReceiverKind = 3
+)
+
+type FfiConverterReceiverKind struct{}
+
+var FfiConverterReceiverKindINSTANCE = FfiConverterReceiverKind{}
+
+func (c FfiConverterReceiverKind) Lift(rb RustBufferI) ReceiverKind {
+	return LiftFromRustBuffer[ReceiverKind](c, rb)
+}
+
+func (c FfiConverterReceiverKind) Lower(value ReceiverKind) C.RustBuffer {
+	return LowerIntoRustBuffer[ReceiverKind](c, value)
+}
+
+func (c FfiConverterReceiverKind) LowerExternal(value ReceiverKind) ExternalCRustBuffer {
+	return RustBufferFromC(LowerIntoRustBuffer[ReceiverKind](c, value))
+}
+func (FfiConverterReceiverKind) Read(reader io.Reader) ReceiverKind {
+	id := readInt32(reader)
+	return ReceiverKind(id)
+}
+
+func (FfiConverterReceiverKind) Write(writer io.Writer, value ReceiverKind) {
+	writeInt32(writer, int32(value))
+}
+
+type FfiDestroyerReceiverKind struct{}
+
+func (_ FfiDestroyerReceiverKind) Destroy(value ReceiverKind) {
 }
 
 // The receivers to include in a newly generated unified address.
@@ -2871,6 +4575,17 @@ var ErrWalletErrorAddressGapLimit = fmt.Errorf("WalletErrorAddressGapLimit")
 var ErrWalletErrorChainContinuity = fmt.Errorf("WalletErrorChainContinuity")
 var ErrWalletErrorRewindInvalid = fmt.Errorf("WalletErrorRewindInvalid")
 var ErrWalletErrorScan = fmt.Errorf("WalletErrorScan")
+var ErrWalletErrorInsufficientFunds = fmt.Errorf("WalletErrorInsufficientFunds")
+var ErrWalletErrorNotSynced = fmt.Errorf("WalletErrorNotSynced")
+var ErrWalletErrorFeeTooHigh = fmt.Errorf("WalletErrorFeeTooHigh")
+var ErrWalletErrorUnsupportedRecipient = fmt.Errorf("WalletErrorUnsupportedRecipient")
+var ErrWalletErrorAmountChanged = fmt.Errorf("WalletErrorAmountChanged")
+var ErrWalletErrorTooLarge = fmt.Errorf("WalletErrorTooLarge")
+var ErrWalletErrorAddressExpired = fmt.Errorf("WalletErrorAddressExpired")
+var ErrWalletErrorAmountBelowMinimum = fmt.Errorf("WalletErrorAmountBelowMinimum")
+var ErrWalletErrorMemoNotAllowed = fmt.Errorf("WalletErrorMemoNotAllowed")
+var ErrWalletErrorSeedMismatch = fmt.Errorf("WalletErrorSeedMismatch")
+var ErrWalletErrorSend = fmt.Errorf("WalletErrorSend")
 var ErrWalletErrorInternal = fmt.Errorf("WalletErrorInternal")
 
 // Variant structs
@@ -3157,6 +4872,363 @@ func (self WalletErrorScan) Is(target error) bool {
 	return target == ErrWalletErrorScan
 }
 
+// The account's spendable funds do not cover the payment and its fee.
+// Both values are in zatoshis. `required` includes the fee.
+type WalletErrorInsufficientFunds struct {
+	Available uint64
+	Required  uint64
+}
+
+// The account's spendable funds do not cover the payment and its fee.
+// Both values are in zatoshis. `required` includes the fee.
+func NewWalletErrorInsufficientFunds(
+	available uint64,
+	required uint64,
+) *WalletError {
+	return &WalletError{err: &WalletErrorInsufficientFunds{
+		Available: available,
+		Required:  required}}
+}
+
+func (e WalletErrorInsufficientFunds) destroy() {
+	FfiDestroyerUint64{}.Destroy(e.Available)
+	FfiDestroyerUint64{}.Destroy(e.Required)
+}
+
+func (err WalletErrorInsufficientFunds) Error() string {
+	return fmt.Sprint("InsufficientFunds",
+		": ",
+
+		"Available=",
+		err.Available,
+		", ",
+		"Required=",
+		err.Required,
+	)
+}
+
+func (self WalletErrorInsufficientFunds) Is(target error) bool {
+	return target == ErrWalletErrorInsufficientFunds
+}
+
+// The wallet has not scanned far enough to build a transaction: it lacks
+// a chain tip or a note commitment tree anchor. Syncing resolves it.
+type WalletErrorNotSynced struct {
+	Message string
+}
+
+// The wallet has not scanned far enough to build a transaction: it lacks
+// a chain tip or a note commitment tree anchor. Syncing resolves it.
+func NewWalletErrorNotSynced(
+	message string,
+) *WalletError {
+	return &WalletError{err: &WalletErrorNotSynced{
+		Message: message}}
+}
+
+func (e WalletErrorNotSynced) destroy() {
+	FfiDestroyerString{}.Destroy(e.Message)
+}
+
+func (err WalletErrorNotSynced) Error() string {
+	return fmt.Sprint("NotSynced",
+		": ",
+
+		"Message=",
+		err.Message,
+	)
+}
+
+func (self WalletErrorNotSynced) Is(target error) bool {
+	return target == ErrWalletErrorNotSynced
+}
+
+// The fee of the transaction exceeds the limit the caller set.
+type WalletErrorFeeTooHigh struct {
+	Fee    uint64
+	MaxFee uint64
+}
+
+// The fee of the transaction exceeds the limit the caller set.
+func NewWalletErrorFeeTooHigh(
+	fee uint64,
+	maxFee uint64,
+) *WalletError {
+	return &WalletError{err: &WalletErrorFeeTooHigh{
+		Fee:    fee,
+		MaxFee: maxFee}}
+}
+
+func (e WalletErrorFeeTooHigh) destroy() {
+	FfiDestroyerUint64{}.Destroy(e.Fee)
+	FfiDestroyerUint64{}.Destroy(e.MaxFee)
+}
+
+func (err WalletErrorFeeTooHigh) Error() string {
+	return fmt.Sprint("FeeTooHigh",
+		": ",
+
+		"Fee=",
+		err.Fee,
+		", ",
+		"MaxFee=",
+		err.MaxFee,
+	)
+}
+
+func (self WalletErrorFeeTooHigh) Is(target error) bool {
+	return target == ErrWalletErrorFeeTooHigh
+}
+
+// The recipient cannot be paid by this wallet: an address of another
+// network, a Sapling address, a TEX address, or a unified address
+// without an Orchard or a transparent receiver.
+type WalletErrorUnsupportedRecipient struct {
+	Message string
+}
+
+// The recipient cannot be paid by this wallet: an address of another
+// network, a Sapling address, a TEX address, or a unified address
+// without an Orchard or a transparent receiver.
+func NewWalletErrorUnsupportedRecipient(
+	message string,
+) *WalletError {
+	return &WalletError{err: &WalletErrorUnsupportedRecipient{
+		Message: message}}
+}
+
+func (e WalletErrorUnsupportedRecipient) destroy() {
+	FfiDestroyerString{}.Destroy(e.Message)
+}
+
+func (err WalletErrorUnsupportedRecipient) Error() string {
+	return fmt.Sprint("UnsupportedRecipient",
+		": ",
+
+		"Message=",
+		err.Message,
+	)
+}
+
+func (self WalletErrorUnsupportedRecipient) Is(target error) bool {
+	return target == ErrWalletErrorUnsupportedRecipient
+}
+
+// A send max would pay another amount than the caller expected, because
+// the spendable inputs changed since the amount was estimated. Nothing
+// was created.
+type WalletErrorAmountChanged struct {
+	Expected uint64
+	Actual   uint64
+}
+
+// A send max would pay another amount than the caller expected, because
+// the spendable inputs changed since the amount was estimated. Nothing
+// was created.
+func NewWalletErrorAmountChanged(
+	expected uint64,
+	actual uint64,
+) *WalletError {
+	return &WalletError{err: &WalletErrorAmountChanged{
+		Expected: expected,
+		Actual:   actual}}
+}
+
+func (e WalletErrorAmountChanged) destroy() {
+	FfiDestroyerUint64{}.Destroy(e.Expected)
+	FfiDestroyerUint64{}.Destroy(e.Actual)
+}
+
+func (err WalletErrorAmountChanged) Error() string {
+	return fmt.Sprint("AmountChanged",
+		": ",
+
+		"Expected=",
+		err.Expected,
+		", ",
+		"Actual=",
+		err.Actual,
+	)
+}
+
+func (self WalletErrorAmountChanged) Is(target error) bool {
+	return target == ErrWalletErrorAmountChanged
+}
+
+// The transaction would be larger than a block can hold, typically for
+// spending too many inputs. Nothing was created. A smaller payment, or
+// one made after some of the inputs have been consolidated, can succeed.
+type WalletErrorTooLarge struct {
+	Message string
+}
+
+// The transaction would be larger than a block can hold, typically for
+// spending too many inputs. Nothing was created. A smaller payment, or
+// one made after some of the inputs have been consolidated, can succeed.
+func NewWalletErrorTooLarge(
+	message string,
+) *WalletError {
+	return &WalletError{err: &WalletErrorTooLarge{
+		Message: message}}
+}
+
+func (e WalletErrorTooLarge) destroy() {
+	FfiDestroyerString{}.Destroy(e.Message)
+}
+
+func (err WalletErrorTooLarge) Error() string {
+	return fmt.Sprint("TooLarge",
+		": ",
+
+		"Message=",
+		err.Message,
+	)
+}
+
+func (self WalletErrorTooLarge) Is(target error) bool {
+	return target == ErrWalletErrorTooLarge
+}
+
+// The recipient's unified address has expired, or expires before the
+// transaction would (ZIP 316).
+type WalletErrorAddressExpired struct {
+	Message string
+}
+
+// The recipient's unified address has expired, or expires before the
+// transaction would (ZIP 316).
+func NewWalletErrorAddressExpired(
+	message string,
+) *WalletError {
+	return &WalletError{err: &WalletErrorAddressExpired{
+		Message: message}}
+}
+
+func (e WalletErrorAddressExpired) destroy() {
+	FfiDestroyerString{}.Destroy(e.Message)
+}
+
+func (err WalletErrorAddressExpired) Error() string {
+	return fmt.Sprint("AddressExpired",
+		": ",
+
+		"Message=",
+		err.Message,
+	)
+}
+
+func (self WalletErrorAddressExpired) Is(target error) bool {
+	return target == ErrWalletErrorAddressExpired
+}
+
+// The amount of a payment to a transparent receiver is below the
+// smallest output that nodes relay, `minimum` zatoshis.
+type WalletErrorAmountBelowMinimum struct {
+	Minimum uint64
+}
+
+// The amount of a payment to a transparent receiver is below the
+// smallest output that nodes relay, `minimum` zatoshis.
+func NewWalletErrorAmountBelowMinimum(
+	minimum uint64,
+) *WalletError {
+	return &WalletError{err: &WalletErrorAmountBelowMinimum{
+		Minimum: minimum}}
+}
+
+func (e WalletErrorAmountBelowMinimum) destroy() {
+	FfiDestroyerUint64{}.Destroy(e.Minimum)
+}
+
+func (err WalletErrorAmountBelowMinimum) Error() string {
+	return fmt.Sprint("AmountBelowMinimum",
+		": ",
+
+		"Minimum=",
+		err.Minimum,
+	)
+}
+
+func (self WalletErrorAmountBelowMinimum) Is(target error) bool {
+	return target == ErrWalletErrorAmountBelowMinimum
+}
+
+// A memo was given for a payment to a transparent receiver, which cannot
+// carry one.
+type WalletErrorMemoNotAllowed struct {
+}
+
+// A memo was given for a payment to a transparent receiver, which cannot
+// carry one.
+func NewWalletErrorMemoNotAllowed() *WalletError {
+	return &WalletError{err: &WalletErrorMemoNotAllowed{}}
+}
+
+func (e WalletErrorMemoNotAllowed) destroy() {
+}
+
+func (err WalletErrorMemoNotAllowed) Error() string {
+	return fmt.Sprint("MemoNotAllowed")
+}
+
+func (self WalletErrorMemoNotAllowed) Is(target error) bool {
+	return target == ErrWalletErrorMemoNotAllowed
+}
+
+// The seed given to spend from an account is not the seed the account
+// was derived from.
+type WalletErrorSeedMismatch struct {
+}
+
+// The seed given to spend from an account is not the seed the account
+// was derived from.
+func NewWalletErrorSeedMismatch() *WalletError {
+	return &WalletError{err: &WalletErrorSeedMismatch{}}
+}
+
+func (e WalletErrorSeedMismatch) destroy() {
+}
+
+func (err WalletErrorSeedMismatch) Error() string {
+	return fmt.Sprint("SeedMismatch")
+}
+
+func (self WalletErrorSeedMismatch) Is(target error) bool {
+	return target == ErrWalletErrorSeedMismatch
+}
+
+// A transaction could not be proposed or created for a reason without
+// its own variant.
+type WalletErrorSend struct {
+	Message string
+}
+
+// A transaction could not be proposed or created for a reason without
+// its own variant.
+func NewWalletErrorSend(
+	message string,
+) *WalletError {
+	return &WalletError{err: &WalletErrorSend{
+		Message: message}}
+}
+
+func (e WalletErrorSend) destroy() {
+	FfiDestroyerString{}.Destroy(e.Message)
+}
+
+func (err WalletErrorSend) Error() string {
+	return fmt.Sprint("Send",
+		": ",
+
+		"Message=",
+		err.Message,
+	)
+}
+
+func (self WalletErrorSend) Is(target error) bool {
+	return target == ErrWalletErrorSend
+}
+
 // A bug: a panic was caught at the FFI boundary.
 type WalletErrorInternal struct {
 	Message string
@@ -3241,6 +5313,49 @@ func (c FfiConverterWalletError) Read(reader io.Reader) *WalletError {
 			Message:  FfiConverterStringINSTANCE.Read(reader),
 		}}
 	case 10:
+		return &WalletError{&WalletErrorInsufficientFunds{
+			Available: FfiConverterUint64INSTANCE.Read(reader),
+			Required:  FfiConverterUint64INSTANCE.Read(reader),
+		}}
+	case 11:
+		return &WalletError{&WalletErrorNotSynced{
+			Message: FfiConverterStringINSTANCE.Read(reader),
+		}}
+	case 12:
+		return &WalletError{&WalletErrorFeeTooHigh{
+			Fee:    FfiConverterUint64INSTANCE.Read(reader),
+			MaxFee: FfiConverterUint64INSTANCE.Read(reader),
+		}}
+	case 13:
+		return &WalletError{&WalletErrorUnsupportedRecipient{
+			Message: FfiConverterStringINSTANCE.Read(reader),
+		}}
+	case 14:
+		return &WalletError{&WalletErrorAmountChanged{
+			Expected: FfiConverterUint64INSTANCE.Read(reader),
+			Actual:   FfiConverterUint64INSTANCE.Read(reader),
+		}}
+	case 15:
+		return &WalletError{&WalletErrorTooLarge{
+			Message: FfiConverterStringINSTANCE.Read(reader),
+		}}
+	case 16:
+		return &WalletError{&WalletErrorAddressExpired{
+			Message: FfiConverterStringINSTANCE.Read(reader),
+		}}
+	case 17:
+		return &WalletError{&WalletErrorAmountBelowMinimum{
+			Minimum: FfiConverterUint64INSTANCE.Read(reader),
+		}}
+	case 18:
+		return &WalletError{&WalletErrorMemoNotAllowed{}}
+	case 19:
+		return &WalletError{&WalletErrorSeedMismatch{}}
+	case 20:
+		return &WalletError{&WalletErrorSend{
+			Message: FfiConverterStringINSTANCE.Read(reader),
+		}}
+	case 21:
 		return &WalletError{&WalletErrorInternal{
 			Message: FfiConverterStringINSTANCE.Read(reader),
 		}}
@@ -3278,8 +5393,42 @@ func (c FfiConverterWalletError) Write(writer io.Writer, value *WalletError) {
 		writeInt32(writer, 9)
 		FfiConverterUint32INSTANCE.Write(writer, variantValue.AtHeight)
 		FfiConverterStringINSTANCE.Write(writer, variantValue.Message)
-	case *WalletErrorInternal:
+	case *WalletErrorInsufficientFunds:
 		writeInt32(writer, 10)
+		FfiConverterUint64INSTANCE.Write(writer, variantValue.Available)
+		FfiConverterUint64INSTANCE.Write(writer, variantValue.Required)
+	case *WalletErrorNotSynced:
+		writeInt32(writer, 11)
+		FfiConverterStringINSTANCE.Write(writer, variantValue.Message)
+	case *WalletErrorFeeTooHigh:
+		writeInt32(writer, 12)
+		FfiConverterUint64INSTANCE.Write(writer, variantValue.Fee)
+		FfiConverterUint64INSTANCE.Write(writer, variantValue.MaxFee)
+	case *WalletErrorUnsupportedRecipient:
+		writeInt32(writer, 13)
+		FfiConverterStringINSTANCE.Write(writer, variantValue.Message)
+	case *WalletErrorAmountChanged:
+		writeInt32(writer, 14)
+		FfiConverterUint64INSTANCE.Write(writer, variantValue.Expected)
+		FfiConverterUint64INSTANCE.Write(writer, variantValue.Actual)
+	case *WalletErrorTooLarge:
+		writeInt32(writer, 15)
+		FfiConverterStringINSTANCE.Write(writer, variantValue.Message)
+	case *WalletErrorAddressExpired:
+		writeInt32(writer, 16)
+		FfiConverterStringINSTANCE.Write(writer, variantValue.Message)
+	case *WalletErrorAmountBelowMinimum:
+		writeInt32(writer, 17)
+		FfiConverterUint64INSTANCE.Write(writer, variantValue.Minimum)
+	case *WalletErrorMemoNotAllowed:
+		writeInt32(writer, 18)
+	case *WalletErrorSeedMismatch:
+		writeInt32(writer, 19)
+	case *WalletErrorSend:
+		writeInt32(writer, 20)
+		FfiConverterStringINSTANCE.Write(writer, variantValue.Message)
+	case *WalletErrorInternal:
+		writeInt32(writer, 21)
 		FfiConverterStringINSTANCE.Write(writer, variantValue.Message)
 	default:
 		_ = variantValue
@@ -3308,6 +5457,28 @@ func (_ FfiDestroyerWalletError) Destroy(value *WalletError) {
 	case WalletErrorRewindInvalid:
 		variantValue.destroy()
 	case WalletErrorScan:
+		variantValue.destroy()
+	case WalletErrorInsufficientFunds:
+		variantValue.destroy()
+	case WalletErrorNotSynced:
+		variantValue.destroy()
+	case WalletErrorFeeTooHigh:
+		variantValue.destroy()
+	case WalletErrorUnsupportedRecipient:
+		variantValue.destroy()
+	case WalletErrorAmountChanged:
+		variantValue.destroy()
+	case WalletErrorTooLarge:
+		variantValue.destroy()
+	case WalletErrorAddressExpired:
+		variantValue.destroy()
+	case WalletErrorAmountBelowMinimum:
+		variantValue.destroy()
+	case WalletErrorMemoNotAllowed:
+		variantValue.destroy()
+	case WalletErrorSeedMismatch:
+		variantValue.destroy()
+	case WalletErrorSend:
 		variantValue.destroy()
 	case WalletErrorInternal:
 		variantValue.destroy()
@@ -3522,6 +5693,47 @@ func (_ FfiDestroyerOptionalRatio) Destroy(value *Ratio) {
 	}
 }
 
+type FfiConverterOptionalTxRecord struct{}
+
+var FfiConverterOptionalTxRecordINSTANCE = FfiConverterOptionalTxRecord{}
+
+func (c FfiConverterOptionalTxRecord) Lift(rb RustBufferI) *TxRecord {
+	return LiftFromRustBuffer[*TxRecord](c, rb)
+}
+
+func (_ FfiConverterOptionalTxRecord) Read(reader io.Reader) *TxRecord {
+	if readInt8(reader) == 0 {
+		return nil
+	}
+	temp := FfiConverterTxRecordINSTANCE.Read(reader)
+	return &temp
+}
+
+func (c FfiConverterOptionalTxRecord) Lower(value *TxRecord) C.RustBuffer {
+	return LowerIntoRustBuffer[*TxRecord](c, value)
+}
+
+func (c FfiConverterOptionalTxRecord) LowerExternal(value *TxRecord) ExternalCRustBuffer {
+	return RustBufferFromC(LowerIntoRustBuffer[*TxRecord](c, value))
+}
+
+func (_ FfiConverterOptionalTxRecord) Write(writer io.Writer, value *TxRecord) {
+	if value == nil {
+		writeInt8(writer, 0)
+	} else {
+		writeInt8(writer, 1)
+		FfiConverterTxRecordINSTANCE.Write(writer, *value)
+	}
+}
+
+type FfiDestroyerOptionalTxRecord struct{}
+
+func (_ FfiDestroyerOptionalTxRecord) Destroy(value *TxRecord) {
+	if value != nil {
+		FfiDestroyerTxRecord{}.Destroy(*value)
+	}
+}
+
 type FfiConverterOptionalWalletSummary struct{}
 
 var FfiConverterOptionalWalletSummaryINSTANCE = FfiConverterOptionalWalletSummary{}
@@ -3560,6 +5772,47 @@ type FfiDestroyerOptionalWalletSummary struct{}
 func (_ FfiDestroyerOptionalWalletSummary) Destroy(value *WalletSummary) {
 	if value != nil {
 		FfiDestroyerWalletSummary{}.Destroy(*value)
+	}
+}
+
+type FfiConverterOptionalPaidPool struct{}
+
+var FfiConverterOptionalPaidPoolINSTANCE = FfiConverterOptionalPaidPool{}
+
+func (c FfiConverterOptionalPaidPool) Lift(rb RustBufferI) *PaidPool {
+	return LiftFromRustBuffer[*PaidPool](c, rb)
+}
+
+func (_ FfiConverterOptionalPaidPool) Read(reader io.Reader) *PaidPool {
+	if readInt8(reader) == 0 {
+		return nil
+	}
+	temp := FfiConverterPaidPoolINSTANCE.Read(reader)
+	return &temp
+}
+
+func (c FfiConverterOptionalPaidPool) Lower(value *PaidPool) C.RustBuffer {
+	return LowerIntoRustBuffer[*PaidPool](c, value)
+}
+
+func (c FfiConverterOptionalPaidPool) LowerExternal(value *PaidPool) ExternalCRustBuffer {
+	return RustBufferFromC(LowerIntoRustBuffer[*PaidPool](c, value))
+}
+
+func (_ FfiConverterOptionalPaidPool) Write(writer io.Writer, value *PaidPool) {
+	if value == nil {
+		writeInt8(writer, 0)
+	} else {
+		writeInt8(writer, 1)
+		FfiConverterPaidPoolINSTANCE.Write(writer, *value)
+	}
+}
+
+type FfiDestroyerOptionalPaidPool struct{}
+
+func (_ FfiDestroyerOptionalPaidPool) Destroy(value *PaidPool) {
+	if value != nil {
+		FfiDestroyerPaidPool{}.Destroy(*value)
 	}
 }
 
@@ -3704,6 +5957,100 @@ func (FfiDestroyerSequenceAccountBalance) Destroy(sequence []AccountBalance) {
 	}
 }
 
+type FfiConverterSequenceCreatedTransaction struct{}
+
+var FfiConverterSequenceCreatedTransactionINSTANCE = FfiConverterSequenceCreatedTransaction{}
+
+func (c FfiConverterSequenceCreatedTransaction) Lift(rb RustBufferI) []CreatedTransaction {
+	return LiftFromRustBuffer[[]CreatedTransaction](c, rb)
+}
+
+func (c FfiConverterSequenceCreatedTransaction) Read(reader io.Reader) []CreatedTransaction {
+	length := readInt32(reader)
+	if length == 0 {
+		return nil
+	}
+	result := make([]CreatedTransaction, 0, length)
+	for i := int32(0); i < length; i++ {
+		result = append(result, FfiConverterCreatedTransactionINSTANCE.Read(reader))
+	}
+	return result
+}
+
+func (c FfiConverterSequenceCreatedTransaction) Lower(value []CreatedTransaction) C.RustBuffer {
+	return LowerIntoRustBuffer[[]CreatedTransaction](c, value)
+}
+
+func (c FfiConverterSequenceCreatedTransaction) LowerExternal(value []CreatedTransaction) ExternalCRustBuffer {
+	return RustBufferFromC(LowerIntoRustBuffer[[]CreatedTransaction](c, value))
+}
+
+func (c FfiConverterSequenceCreatedTransaction) Write(writer io.Writer, value []CreatedTransaction) {
+	if len(value) > math.MaxInt32 {
+		panic("[]CreatedTransaction is too large to fit into Int32")
+	}
+
+	writeInt32(writer, int32(len(value)))
+	for _, item := range value {
+		FfiConverterCreatedTransactionINSTANCE.Write(writer, item)
+	}
+}
+
+type FfiDestroyerSequenceCreatedTransaction struct{}
+
+func (FfiDestroyerSequenceCreatedTransaction) Destroy(sequence []CreatedTransaction) {
+	for _, value := range sequence {
+		FfiDestroyerCreatedTransaction{}.Destroy(value)
+	}
+}
+
+type FfiConverterSequenceReceiver struct{}
+
+var FfiConverterSequenceReceiverINSTANCE = FfiConverterSequenceReceiver{}
+
+func (c FfiConverterSequenceReceiver) Lift(rb RustBufferI) []Receiver {
+	return LiftFromRustBuffer[[]Receiver](c, rb)
+}
+
+func (c FfiConverterSequenceReceiver) Read(reader io.Reader) []Receiver {
+	length := readInt32(reader)
+	if length == 0 {
+		return nil
+	}
+	result := make([]Receiver, 0, length)
+	for i := int32(0); i < length; i++ {
+		result = append(result, FfiConverterReceiverINSTANCE.Read(reader))
+	}
+	return result
+}
+
+func (c FfiConverterSequenceReceiver) Lower(value []Receiver) C.RustBuffer {
+	return LowerIntoRustBuffer[[]Receiver](c, value)
+}
+
+func (c FfiConverterSequenceReceiver) LowerExternal(value []Receiver) ExternalCRustBuffer {
+	return RustBufferFromC(LowerIntoRustBuffer[[]Receiver](c, value))
+}
+
+func (c FfiConverterSequenceReceiver) Write(writer io.Writer, value []Receiver) {
+	if len(value) > math.MaxInt32 {
+		panic("[]Receiver is too large to fit into Int32")
+	}
+
+	writeInt32(writer, int32(len(value)))
+	for _, item := range value {
+		FfiConverterReceiverINSTANCE.Write(writer, item)
+	}
+}
+
+type FfiDestroyerSequenceReceiver struct{}
+
+func (FfiDestroyerSequenceReceiver) Destroy(sequence []Receiver) {
+	for _, value := range sequence {
+		FfiDestroyerReceiver{}.Destroy(value)
+	}
+}
+
 type FfiConverterSequenceScanRange struct{}
 
 var FfiConverterSequenceScanRangeINSTANCE = FfiConverterSequenceScanRange{}
@@ -3798,6 +6145,147 @@ func (FfiDestroyerSequenceSubtreeRoot) Destroy(sequence []SubtreeRoot) {
 	}
 }
 
+type FfiConverterSequenceTxOutput struct{}
+
+var FfiConverterSequenceTxOutputINSTANCE = FfiConverterSequenceTxOutput{}
+
+func (c FfiConverterSequenceTxOutput) Lift(rb RustBufferI) []TxOutput {
+	return LiftFromRustBuffer[[]TxOutput](c, rb)
+}
+
+func (c FfiConverterSequenceTxOutput) Read(reader io.Reader) []TxOutput {
+	length := readInt32(reader)
+	if length == 0 {
+		return nil
+	}
+	result := make([]TxOutput, 0, length)
+	for i := int32(0); i < length; i++ {
+		result = append(result, FfiConverterTxOutputINSTANCE.Read(reader))
+	}
+	return result
+}
+
+func (c FfiConverterSequenceTxOutput) Lower(value []TxOutput) C.RustBuffer {
+	return LowerIntoRustBuffer[[]TxOutput](c, value)
+}
+
+func (c FfiConverterSequenceTxOutput) LowerExternal(value []TxOutput) ExternalCRustBuffer {
+	return RustBufferFromC(LowerIntoRustBuffer[[]TxOutput](c, value))
+}
+
+func (c FfiConverterSequenceTxOutput) Write(writer io.Writer, value []TxOutput) {
+	if len(value) > math.MaxInt32 {
+		panic("[]TxOutput is too large to fit into Int32")
+	}
+
+	writeInt32(writer, int32(len(value)))
+	for _, item := range value {
+		FfiConverterTxOutputINSTANCE.Write(writer, item)
+	}
+}
+
+type FfiDestroyerSequenceTxOutput struct{}
+
+func (FfiDestroyerSequenceTxOutput) Destroy(sequence []TxOutput) {
+	for _, value := range sequence {
+		FfiDestroyerTxOutput{}.Destroy(value)
+	}
+}
+
+type FfiConverterSequenceTxRecord struct{}
+
+var FfiConverterSequenceTxRecordINSTANCE = FfiConverterSequenceTxRecord{}
+
+func (c FfiConverterSequenceTxRecord) Lift(rb RustBufferI) []TxRecord {
+	return LiftFromRustBuffer[[]TxRecord](c, rb)
+}
+
+func (c FfiConverterSequenceTxRecord) Read(reader io.Reader) []TxRecord {
+	length := readInt32(reader)
+	if length == 0 {
+		return nil
+	}
+	result := make([]TxRecord, 0, length)
+	for i := int32(0); i < length; i++ {
+		result = append(result, FfiConverterTxRecordINSTANCE.Read(reader))
+	}
+	return result
+}
+
+func (c FfiConverterSequenceTxRecord) Lower(value []TxRecord) C.RustBuffer {
+	return LowerIntoRustBuffer[[]TxRecord](c, value)
+}
+
+func (c FfiConverterSequenceTxRecord) LowerExternal(value []TxRecord) ExternalCRustBuffer {
+	return RustBufferFromC(LowerIntoRustBuffer[[]TxRecord](c, value))
+}
+
+func (c FfiConverterSequenceTxRecord) Write(writer io.Writer, value []TxRecord) {
+	if len(value) > math.MaxInt32 {
+		panic("[]TxRecord is too large to fit into Int32")
+	}
+
+	writeInt32(writer, int32(len(value)))
+	for _, item := range value {
+		FfiConverterTxRecordINSTANCE.Write(writer, item)
+	}
+}
+
+type FfiDestroyerSequenceTxRecord struct{}
+
+func (FfiDestroyerSequenceTxRecord) Destroy(sequence []TxRecord) {
+	for _, value := range sequence {
+		FfiDestroyerTxRecord{}.Destroy(value)
+	}
+}
+
+type FfiConverterSequenceUnminedTransaction struct{}
+
+var FfiConverterSequenceUnminedTransactionINSTANCE = FfiConverterSequenceUnminedTransaction{}
+
+func (c FfiConverterSequenceUnminedTransaction) Lift(rb RustBufferI) []UnminedTransaction {
+	return LiftFromRustBuffer[[]UnminedTransaction](c, rb)
+}
+
+func (c FfiConverterSequenceUnminedTransaction) Read(reader io.Reader) []UnminedTransaction {
+	length := readInt32(reader)
+	if length == 0 {
+		return nil
+	}
+	result := make([]UnminedTransaction, 0, length)
+	for i := int32(0); i < length; i++ {
+		result = append(result, FfiConverterUnminedTransactionINSTANCE.Read(reader))
+	}
+	return result
+}
+
+func (c FfiConverterSequenceUnminedTransaction) Lower(value []UnminedTransaction) C.RustBuffer {
+	return LowerIntoRustBuffer[[]UnminedTransaction](c, value)
+}
+
+func (c FfiConverterSequenceUnminedTransaction) LowerExternal(value []UnminedTransaction) ExternalCRustBuffer {
+	return RustBufferFromC(LowerIntoRustBuffer[[]UnminedTransaction](c, value))
+}
+
+func (c FfiConverterSequenceUnminedTransaction) Write(writer io.Writer, value []UnminedTransaction) {
+	if len(value) > math.MaxInt32 {
+		panic("[]UnminedTransaction is too large to fit into Int32")
+	}
+
+	writeInt32(writer, int32(len(value)))
+	for _, item := range value {
+		FfiConverterUnminedTransactionINSTANCE.Write(writer, item)
+	}
+}
+
+type FfiDestroyerSequenceUnminedTransaction struct{}
+
+func (FfiDestroyerSequenceUnminedTransaction) Destroy(sequence []UnminedTransaction) {
+	for _, value := range sequence {
+		FfiDestroyerUnminedTransaction{}.Destroy(value)
+	}
+}
+
 type FfiConverterSequenceWatchedAddress struct{}
 
 var FfiConverterSequenceWatchedAddressINSTANCE = FfiConverterSequenceWatchedAddress{}
@@ -3889,6 +6377,30 @@ type FfiDestroyerSequenceTransactionDataRequest struct{}
 func (FfiDestroyerSequenceTransactionDataRequest) Destroy(sequence []TransactionDataRequest) {
 	for _, value := range sequence {
 		FfiDestroyerTransactionDataRequest{}.Destroy(value)
+	}
+}
+
+// Parses an address of `network`: its kind, the receivers of a unified
+// address, its expiry, and whether and how the wallet pays it. It takes no
+// database lock and makes no network request, so it suits validating input
+// as it is typed. It does not say whether the address is the wallet's own;
+// that is the caller's business ([`Wallet::owns_address`]).
+//
+// An address that is not valid for the network fails with
+// [`WalletError::InvalidArgument`].
+//
+// [`Wallet::owns_address`]: crate::Wallet::owns_address
+func ParseAddress(network Network, address string) (ParsedAddress, error) {
+	_uniffiRV, _uniffiErr := rustCallWithError[*WalletError](FfiConverterWalletError{}, func(_uniffiStatus *C.RustCallStatus) RustBufferI {
+		return GoRustBuffer{
+			inner: C.uniffi_zeclib_fn_func_parse_address(FfiConverterNetworkINSTANCE.Lower(network), FfiConverterStringINSTANCE.Lower(address), _uniffiStatus),
+		}
+	})
+	if _uniffiErr != nil {
+		var _uniffiDefaultValue ParsedAddress
+		return _uniffiDefaultValue, _uniffiErr
+	} else {
+		return FfiConverterParsedAddressINSTANCE.Lift(_uniffiRV), nil
 	}
 }
 

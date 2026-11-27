@@ -61,9 +61,9 @@ type tProxyDriver struct {
 	opened  []string // WalletConfig.TorProxy, one per Open
 }
 
-func (d *tProxyDriver) Create(params *asset.CreateWalletParams) error {
+func (d *tProxyDriver) Create(ctx context.Context, params *asset.CreateWalletParams) error {
 	d.created = append(d.created, params.TorProxy)
-	return d.tSeededDriver.Create(params)
+	return d.tSeededDriver.Create(ctx, params)
 }
 
 func (d *tProxyDriver) Open(cfg *asset.WalletConfig, log util.Logger, net util.Network) (asset.Wallet, error) {

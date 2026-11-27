@@ -6,8 +6,10 @@ addresses, balances and sync progress. The wallet logic is
 [librustzcash](https://github.com/zcash/librustzcash), reached through
 generated bindings.
 
-Sending funds and an `asset.Wallet` implementation are not part of the
-package yet. Both are planned to build on it.
+It also sends: it estimates fees, builds, proves and signs payments with
+librustzcash, broadcasts them, and broadcasts them again until they are mined
+or expire. It reads an account's transaction history. The `asset.Wallet`
+implementation in `wallet/asset/zec` builds on it.
 
 Ironwood, the pool that NU6.3 adds, is the only shielded pool the wallet
 supports. An account holds funds in the Ironwood pool and in transparent
@@ -174,6 +176,33 @@ stores it:
   them does not stop the scan of blocks either. The failure is reported in
   `SyncStatus.TransparentErr`, and the walk is tried again after a delay.
 
+An unspent output is recorded only once the wallet holds the transaction
+that created it. The wallet tells a coinbase output from a regular one only
+by that transaction, and a payment never spends a coinbase output: a
+coinbase output recorded without its transaction would pass for a regular
+one, and a payment that spent it would be refused by the network. So the
+transaction of each unspent output the server reports is fetched, unless the
+history of the address brought it already, and its outputs wait until it is
+stored. A transaction the server cannot give, for example because a
+reorganization removed it, is asked for again after a delay that grows with
+each failure. A connection that fails during a fetch does not end the cycle:
+it is reported in `SyncStatus.TransparentErr`, like a failed query for the
+outputs. This costs one request for each transparent payment received at an
+address the wallet already knows to be used.
+
+The fetched transaction has to be the one asked for, reported mined at the
+height the server listed its outputs at, and kept by the wallet as one that
+pays it. A transaction the server reports in its mempool, on a fork or at
+another height was moved by a reorganization after the listing, and its
+outputs wait for the next query. Each output is checked against the stored
+transaction, by index, script and value, and one the transaction does not
+have is not recorded. An output that waits is in no balance, and
+`SyncStatus.TransparentErr` reports it with `ErrOutputUnrecorded` until it
+is recorded, in one error with a failure of the requests when both apply.
+`SyncStatus.Err` is then left to the error that ended a cycle. The server is
+asked about the output again in every cycle, except while the requests for
+the transparent addresses are put off after a failure.
+
 Limits:
 
 - At least 10 unused receive addresses are watched. Wallets that follow
@@ -194,6 +223,52 @@ Limits:
   height at which the query for unspent outputs begins stays unseen. That
   height is the account birthday while the wallet knows of no use, and the
   first use among the most recently used addresses after that.
+
+### Sending
+
+`EstimateTransfer` and `Send` pay one recipient. A unified address is paid at
+its Orchard receiver, which lands in the Ironwood pool, and otherwise at its
+transparent receiver; a Sapling address, a TEX address and a unified address
+with neither receiver are refused. The expiry of a unified address is
+honored whichever receiver is paid. A payment spends the account's
+transparent outputs first, other than coinbase outputs, and Ironwood notes
+for the rest, and its change goes to the Ironwood pool. `EstimateSendMax`
+and `SendMax` send everything one transaction can take, with no change.
+
+Each send is checked before it is built: one transaction, nothing in the
+Sapling or Orchard pool, no more than 165 Ironwood actions (half of what
+ZIP 218 lets a block hold), a size a block can hold, and the caller's fee
+limit. A transparent payment below 54 zatoshis, the smallest output nodes
+relay, is refused. The Sapling proving parameters are not linked.
+
+Once `Send` has created a transaction it is pending, whatever the broadcast
+returns: its inputs count as spent until it is mined or expires. A
+transaction the server does not know is broadcast again by the sync loop,
+with a delay that doubles with each check, until it is mined or expires. A
+failed broadcast is never answered by creating a second transaction.
+
+### History
+
+`Transactions` pages through an account's history in the order the wallet
+discovered transactions, from the start or from a watermark.
+`OpenTransactions` lists the records that can still change, and
+`Transaction` reads one. Each read carries the chain tip it was made against.
+`Config.OnChange` reports that the sync loop wrote to the wallet database, at
+most once a second during a cycle and once more at its end; a consumer
+compares what it holds with what it reads. `Config.OnRewind` reports each
+rewind with the height rewound to. A transaction above it can be scanned
+again at another height before a consumer reads, without ever showing as
+unmined, so a consumer that keeps a copy of the history reads it again in
+full.
+
+### Addresses and birthdays
+
+`ParseAddress` tells the kind of an address, the receivers of a unified
+address with an address for each that a sender can pay on its own, its
+expiry, and how a payment to it would be made, without a database or a
+server. `OwnsAddress` asks the database whether an address is the wallet's.
+`HeightForTime` maps the time a seed was made, less a margin the caller
+chooses, to a birthday height, from the block times of the server.
 
 ### Servers
 

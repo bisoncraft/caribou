@@ -109,7 +109,7 @@ func TestDriverExists(t *testing.T) {
 		Net:     util.Regtest,
 		Logger:  util.Disabled,
 	}
-	if err := d.Create(baseParams); err != nil {
+	if err := d.Create(t.Context(), baseParams); err != nil {
 		t.Fatalf("Create errored: %v", err)
 	}
 	// Pin the directory layout itself, not just that Create and Exists agree
@@ -148,25 +148,25 @@ func TestDriverCreate(t *testing.T) {
 
 	bad := *baseParams
 	bad.Type = "unknown"
-	if err := d.Create(&bad); err == nil {
+	if err := d.Create(t.Context(), &bad); err == nil {
 		t.Fatal("Create accepted unsupported wallet type")
 	}
 
 	bad = *baseParams
 	bad.Seed = nil
-	if err := d.Create(&bad); err == nil {
+	if err := d.Create(t.Context(), &bad); err == nil {
 		t.Fatal("Create accepted empty seed")
 	}
 
 	bad = *baseParams
 	bad.DataDir = ""
-	if err := d.Create(&bad); err == nil {
+	if err := d.Create(t.Context(), &bad); err == nil {
 		t.Fatal("Create accepted empty data directory")
 	}
 
 	bad = *baseParams
 	bad.Net = util.Network(99)
-	if err := d.Create(&bad); err == nil {
+	if err := d.Create(t.Context(), &bad); err == nil {
 		t.Fatal("Create accepted unknown network")
 	}
 }

@@ -81,6 +81,21 @@ core-level feature rather than a NEAR-wallet feature.
   feature as trustless. Per-chain trust labels are data-driven because the
   PoA→Omni migration is ongoing. All refund and recipient addresses are
   seed-derived, so funds at rest are never in third-party custody.
+- **Zcash addresses are transparent.** The service lists transparent
+  addresses as the only Zcash addresses it supports, so a swap names the
+  transparent receiver of the wallet's unified deposit address as its
+  refund address and recipient, never the unified address itself
+  (`intentsWalletAddress`). A payout or refund therefore arrives as a
+  transparent output, whose amount and address are public on the Zcash
+  chain. The deposit address is the service's choice and is not checked for
+  its kind: a transparent one is expected from the same documentation,
+  pending the live check below, and paying it from shielded funds makes the
+  amount and the deposit address public, not the funds it was paid from. A
+  refund address that is never paid is known to the service and need not
+  appear on the chain. A swap names the deposit address core holds, which
+  is replaced only when a new one is requested for receiving and the held
+  one has been paid, so consecutive swaps can name the same transparent
+  address.
 
 ## Verified protocol behavior (measured 2026-07)
 
@@ -158,6 +173,11 @@ core-level feature rather than a NEAR-wallet feature.
 
 - [ ] End-to-end swaps across representative pairs (UTXO→account,
   account→UTXO, token→native, NEAR-origin).
+- [ ] Zcash, each way: the kind of deposit address the service issues (the
+  wallet pays transparent and unified addresses, not Sapling or TEX ones),
+  and the confirmations it waits for before it acts on a deposit. Dry
+  quotes (2026-11-14) accepted a unified address as recipient and as
+  refund address, which says nothing about which receiver would be paid.
 - [ ] `appFees` net receipt: confirm the 50% split, the fee's token
   denomination, and its NEP-245 form at the fee-account identity.
 - [ ] Realized fill vs. quoted `amountOut`: if fills cluster at the

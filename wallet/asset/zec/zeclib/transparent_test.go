@@ -151,7 +151,7 @@ func transparentBalance(t *testing.T, e *env) uint64 {
 		t.Fatalf("Summary: %+v, %v", summary, err)
 	}
 	balance, _ := summary.Balance(e.account.ID)
-	return balance.Transparent.Total
+	return balance.Transparent.Total + balance.Coinbase.Total
 }
 
 // TestWalkFindsFundsBehindSpentAddresses restores a seed whose first 29
@@ -427,6 +427,15 @@ func TestWalkAsksAboutAnAddressThatIsNoLongerUnused(t *testing.T) {
 			s.addrTxs[address] = history
 			s.utxos[address] = unspent
 			s.fail["GetTaddressTxids"] = status.Error(codes.InvalidArgument, "not today")
+			// The funding transaction of the unspent output is served on
+			// its own.
+			for _, u := range unspent {
+				for _, tx := range history {
+					if tx.Height == u.Height {
+						s.txs[string(u.Txid)] = tx
+					}
+				}
+			}
 		})
 
 		e.connect()

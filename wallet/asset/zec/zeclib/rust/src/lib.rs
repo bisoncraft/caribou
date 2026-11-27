@@ -27,6 +27,7 @@ mod address;
 mod blocks;
 mod error;
 mod network;
+mod recipient;
 mod types;
 mod wallet;
 

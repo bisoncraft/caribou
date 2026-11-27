@@ -347,7 +347,7 @@ func TestTokenEVMFactor(t *testing.T) {
 func TestDriverCreate(t *testing.T) {
 	drv := &Driver{}
 	tmp := t.TempDir()
-	err := drv.Create(&asset.CreateWalletParams{
+	err := drv.Create(t.Context(), &asset.CreateWalletParams{
 		Type:     walletTypeRPC,
 		Seed:     encode.RandomBytes(32),
 		Pass:     encode.RandomBytes(32),

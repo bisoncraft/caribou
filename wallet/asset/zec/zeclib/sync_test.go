@@ -6,6 +6,7 @@ package zeclib
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"math"
@@ -33,7 +34,7 @@ func TestBackendErrorsAreRetried(t *testing.T) {
 	// account and one transparent output.
 	methods := []string{
 		"summary", "putSubtreeRoots", "maxScannedHeight", "updateChainTip", "accounts",
-		"transparentReceivers", "utxoQueryHeight", "putUTXO", "suggestScanRanges", "scanBlocks",
+		"transparentReceivers", "utxoQueryHeight", "missingTransactions", "putUTXO", "suggestScanRanges", "scanBlocks",
 		"transactionDataRequests",
 	}
 	for _, method := range methods {
@@ -41,11 +42,7 @@ func TestBackendErrorsAreRetried(t *testing.T) {
 			e, be := newFakeEnv(t, 150, nil)
 			account := e.createAccount(100)
 			address := fakeAddress(account.ID, false, 0)
-			e.srv.set(func(s *fakeLwd) {
-				s.utxos[address] = []*walletrpc.GetAddressUtxosReply{{
-					Address: address, Txid: make([]byte, 32), ValueZat: 5, Height: 110,
-				}}
-			})
+			plantFunded(t, e, fakeKind, address, 5, 110, 1)
 			boom := wrapf(ErrDatabase, "disk full")
 			be.set(func(b *fakeBackend) { b.fail[method] = boom })
 
@@ -260,12 +257,19 @@ func TestEnhancement(t *testing.T) {
 	raw := func(n byte, height uint64) *walletrpc.RawTransaction {
 		return &walletrpc.RawTransaction{Data: []byte{n}, Height: height}
 	}
+	// A full transaction is checked against the ID it was requested by,
+	// which the fake backend computes as the hash of its bytes.
+	fullID := func(n byte) []byte {
+		id := sha256.Sum256([]byte{n})
+		return id[:]
+	}
 	e.srv.set(func(s *fakeLwd) {
 		s.txs[string(txid(1))] = raw(1, 120)            // mined
 		s.txs[string(txid(2))] = raw(2, 0)              // in the mempool
 		s.txs[string(txid(3))] = raw(3, math.MaxUint64) // mined on a fork
-		s.txs[string(txid(5))] = raw(5, 130)
-		s.txs[string(txid(6))] = raw(6, 0)
+		s.txs[string(fullID(5))] = raw(5, 130)
+		s.txs[string(fullID(6))] = raw(6, 0)
+		s.txs[string(fullID(8))] = raw(9, 130) // another transaction
 		s.addrTxs["taddr-bounded"] = []*walletrpc.RawTransaction{raw(10, 105), raw(11, 125), raw(12, 149)}
 		s.addrTxs["taddr-open"] = []*walletrpc.RawTransaction{raw(20, 150)}
 	})
@@ -275,9 +279,10 @@ func TestEnhancement(t *testing.T) {
 			{kind: txRequestStatus, txid: txid(2)},
 			{kind: txRequestStatus, txid: txid(3)},
 			{kind: txRequestStatus, txid: txid(4)}, // unknown to the server
-			{kind: txRequestEnhancement, txid: txid(5)},
-			{kind: txRequestEnhancement, txid: txid(6)},
-			{kind: txRequestEnhancement, txid: txid(7)}, // unknown to the server
+			{kind: txRequestEnhancement, txid: fullID(5)},
+			{kind: txRequestEnhancement, txid: fullID(6)},
+			{kind: txRequestEnhancement, txid: fullID(8)}, // answered with another
+			{kind: txRequestEnhancement, txid: txid(7)},   // unknown to the server
 			{kind: txRequestAddress, address: "taddr-bounded", start: 110, end: 141, bounded: true},
 			{kind: txRequestAddress, address: "taddr-open", start: 100},
 			{kind: txRequestAddress, address: "taddr-later", start: 100, requestAt: now.Add(time.Hour)},
@@ -308,7 +313,8 @@ func TestEnhancement(t *testing.T) {
 		}
 
 		// Full transactions: the two enhancements, the two in the bounded
-		// range and the one of the open-ended address.
+		// range and the one of the open-ended address. The transaction
+		// given for another ID is not stored.
 		stored := make(map[byte]*uint32)
 		for _, tx := range b.stored {
 			stored[tx.data[0]] = tx.height
@@ -955,5 +961,108 @@ func TestSyncOptionsDefaults(t *testing.T) {
 	}
 	if opts := syncOptionsFor(&Config{PollInterval: -time.Second}); opts.pollInterval != defaultPollInterval {
 		t.Errorf("negative poll interval: %s", opts.pollInterval)
+	}
+}
+
+// The backoff of a funding transaction is kept while it waits, whatever the
+// other accounts' queries find.
+func TestFundingBackoffIsKeptAcrossAccounts(t *testing.T) {
+	srv := newFakeLwd(t, 150)
+	be := newFakeBackend()
+	a := testAccount(t, be, 1)
+	b := testAccount(t, be, 2)
+	now := time.Unix(1_700_000_000, 0)
+	p := newTestProcessor(t, srv, be, &now)
+	ctx := context.Background()
+	var ids [][]byte
+	for i, account := range []*Account{a, b} {
+		address := fakeAddress(account.ID, false, 0)
+		id := bytes.Repeat([]byte{byte(0xc0 + i)}, 32)
+		ids = append(ids, id)
+		srv.set(func(s *fakeLwd) {
+			s.utxos[address] = []*walletrpc.GetAddressUtxosReply{{
+				Address: address, Txid: id, Script: p2pkhScript(address), ValueZat: 1_000, Height: 120,
+			}}
+		})
+	}
+	fetches := func(id []byte) (n int) {
+		srv.set(func(s *fakeLwd) {
+			for _, q := range s.txQueries {
+				if bytes.Equal(q, id) {
+					n++
+				}
+			}
+		})
+		return n
+	}
+	// Neither transaction is served. Each is fetched once, and not again
+	// within its backoff, however often the queries run.
+	for range 3 {
+		if failed, err := p.refreshUTXOs(ctx, 150, srv.hashAt(150)); failed != nil || err != nil {
+			t.Fatalf("refreshUTXOs: %v, %v", failed, err)
+		}
+	}
+	for i, id := range ids {
+		if n := fetches(id); n != 1 {
+			t.Errorf("the funding transaction of account %d was fetched %d times within its backoff", i, n)
+		}
+	}
+	if len(p.fundDeferred) != 2 {
+		t.Errorf("deferred: %d, want 2", len(p.fundDeferred))
+	}
+	if err := p.unrecordedErr(); !errors.Is(err, ErrOutputUnrecorded) {
+		t.Errorf("unrecorded: %v", err)
+	}
+	// Once both outputs leave the listings, nothing waits.
+	srv.set(func(s *fakeLwd) { s.utxos = make(map[string][]*walletrpc.GetAddressUtxosReply) })
+	if failed, err := p.refreshUTXOs(ctx, 151, srv.hashAt(150)); failed != nil || err != nil {
+		t.Fatalf("refreshUTXOs: %v, %v", failed, err)
+	}
+	if len(p.fundDeferred) != 0 || p.unrecordedErr() != nil {
+		t.Errorf("after the outputs left: deferred %d, unrecorded %v", len(p.fundDeferred), p.unrecordedErr())
+	}
+}
+
+// A transaction listed at two heights is a stale listing, also when the
+// wallet holds it: none of its outputs is recorded, it is not fetched, and the
+// query is asked again.
+func TestAHeldTransactionListedAtTwoHeights(t *testing.T) {
+	srv := newFakeLwd(t, 150)
+	be := newFakeBackend()
+	account := testAccount(t, be, 1)
+	now := time.Unix(1_700_000_000, 0)
+	p := newTestProcessor(t, srv, be, &now)
+	ctx := context.Background()
+	address := fakeAddress(account.ID, false, 0)
+	raw := testTx(
+		[]testOutPoint{{txid: bytes.Repeat([]byte{0xb1}, 32)}},
+		[]testOutput{{script: p2pkhScript(address), value: 1_000}, {script: p2pkhScript(address), value: 2_000}},
+	)
+	id, err := be.decryptAndStoreTransaction(raw, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv.set(func(s *fakeLwd) {
+		s.utxos[address] = []*walletrpc.GetAddressUtxosReply{
+			{Address: address, Txid: id, Index: 0, Script: p2pkhScript(address), ValueZat: 1_000, Height: 120},
+			{Address: address, Txid: id, Index: 1, Script: p2pkhScript(address), ValueZat: 2_000, Height: 121},
+		}
+	})
+	for round := 1; round <= 2; round++ {
+		if failed, err := p.refreshUTXOs(ctx, 150, srv.hashAt(150)); failed != nil || err != nil {
+			t.Fatalf("refreshUTXOs: %v, %v", failed, err)
+		}
+		if n := srv.callCount("GetAddressUtxosStream"); n != round {
+			t.Fatalf("round %d: %d queries", round, n)
+		}
+	}
+	if n := be.callCount("putUTXO"); n != 0 {
+		t.Errorf("%d outputs of a contradictory listing were recorded", n)
+	}
+	if n := srv.callCount("GetTransaction"); n != 0 {
+		t.Errorf("the held transaction was fetched %d times", n)
+	}
+	if err := p.unrecordedErr(); !errors.Is(err, ErrOutputUnrecorded) {
+		t.Errorf("unrecorded: %v", err)
 	}
 }

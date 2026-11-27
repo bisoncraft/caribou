@@ -156,7 +156,7 @@ func createHarnessWalletWithNotes(t *testing.T) (*xrpWallet, []byte, chan asset.
 		t.Fatalf("rand: %v", err)
 	}
 	drv := &Driver{}
-	if err := drv.Create(&asset.CreateWalletParams{
+	if err := drv.Create(t.Context(), &asset.CreateWalletParams{
 		Type:    walletTypeRPC,
 		Seed:    seed,
 		Pass:    pw,

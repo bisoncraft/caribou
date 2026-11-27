@@ -48,7 +48,7 @@ func TestCreateEVMWalletKeyedUsesProvidedKeyFn(t *testing.T) {
 	}
 
 	tmpDir := t.TempDir()
-	err = CreateEVMWalletKeyed(ChainIDs[util.Testnet], &asset.CreateWalletParams{
+	err = CreateEVMWalletKeyed(t.Context(), ChainIDs[util.Testnet], &asset.CreateWalletParams{
 		Type:     walletTypeRPC,
 		Seed:     encode.RandomBytes(32), // must be ignored: keyFn doesn't use it
 		Pass:     encode.RandomBytes(32),
@@ -87,7 +87,7 @@ func TestCreateEVMWalletUsesDefaultDerivation(t *testing.T) {
 	wantAddr := crypto.PubkeyToAddress(wantPriv.PublicKey).Hex()
 
 	tmpDir := t.TempDir()
-	err = CreateEVMWallet(ChainIDs[util.Testnet], &asset.CreateWalletParams{
+	err = CreateEVMWallet(t.Context(), ChainIDs[util.Testnet], &asset.CreateWalletParams{
 		Type:     walletTypeRPC,
 		Seed:     seed,
 		Pass:     encode.RandomBytes(32),

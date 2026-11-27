@@ -413,7 +413,7 @@ func (d *Driver) Exists(walletType, dataDir string, _ map[string]string, net uti
 }
 
 // Create creates a new SPV wallet.
-func (d *Driver) Create(params *asset.CreateWalletParams) error {
+func (d *Driver) Create(_ context.Context, params *asset.CreateWalletParams) error {
 	if params.Type != walletTypeSPV {
 		return fmt.Errorf("SPV is the only seeded wallet type. required = %q, requested = %q", walletTypeSPV, params.Type)
 	}

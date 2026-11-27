@@ -1824,7 +1824,7 @@ func TestDriverOpen(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	settings := map[string]string{providersKey: "a.ipc"}
-	err := CreateEVMWallet(ChainIDs[util.Testnet], &asset.CreateWalletParams{
+	err := CreateEVMWallet(t.Context(), ChainIDs[util.Testnet], &asset.CreateWalletParams{
 		Type:     walletTypeRPC,
 		Seed:     encode.RandomBytes(32),
 		Pass:     encode.RandomBytes(32),
@@ -1887,7 +1887,7 @@ func TestDriverExists(t *testing.T) {
 	}
 
 	// Create the wallet.
-	err = CreateEVMWallet(ChainIDs[util.Simnet], &asset.CreateWalletParams{
+	err = CreateEVMWallet(t.Context(), ChainIDs[util.Simnet], &asset.CreateWalletParams{
 		Type:     walletTypeRPC,
 		Seed:     encode.RandomBytes(32),
 		Pass:     encode.RandomBytes(32),

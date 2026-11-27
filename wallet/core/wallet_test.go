@@ -4,6 +4,8 @@
 package core
 
 import (
+	"bytes"
+	"encoding/json"
 	"errors"
 	"testing"
 	"time"
@@ -45,6 +47,35 @@ func TestStateReportsTrustlineAndMinDeposit(t *testing.T) {
 	}
 	if st.MinDeposit != 0 {
 		t.Fatalf("state().MinDeposit = %d for a non-MinimumDepositer wallet, want 0", st.MinDeposit)
+	}
+}
+
+// state must carry a BalanceWarner's warning while it has one, and none for
+// a wallet without a warning or without the interface. The warning is left
+// out of the JSON when there is none.
+func TestStateReportsBalanceWarning(t *testing.T) {
+	xcw, tw := newTWallet(0)
+	st := xcw.state()
+	if st.BalanceWarning != nil {
+		t.Fatalf("state().BalanceWarning = %+v for a wallet without a warning, want nil", st.BalanceWarning)
+	}
+	if b, err := json.Marshal(st); err != nil || bytes.Contains(b, []byte("balanceWarning")) {
+		t.Fatalf("the state of a wallet without a warning: %s, %v", b, err)
+	}
+
+	tw.balanceWarning = &asset.BalanceWarning{Code: "testCode", Detail: "test detail"}
+	st = xcw.state()
+	if st.BalanceWarning == nil || *st.BalanceWarning != *tw.balanceWarning {
+		t.Fatalf("state().BalanceWarning = %+v, want %+v", st.BalanceWarning, tw.balanceWarning)
+	}
+	b, err := json.Marshal(st)
+	if err != nil || !bytes.Contains(b, []byte(`"balanceWarning":{"code":"testCode","detail":"test detail"}`)) {
+		t.Fatalf("the state of a wallet with a warning: %s, %v", b, err)
+	}
+
+	xcw.Wallet = walletOnly{tw}
+	if st := xcw.state(); st.BalanceWarning != nil {
+		t.Fatalf("state().BalanceWarning = %+v for a non-BalanceWarner wallet, want nil", st.BalanceWarning)
 	}
 }
 

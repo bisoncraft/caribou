@@ -136,6 +136,11 @@ func (n Network) ironwoodActivation() uint32 {
 	}
 }
 
+// IronwoodActivation returns the activation height of NU6.3: no account of
+// the network begins below it, so it is a lower bound for the birthday of
+// any account.
+func (n Network) IronwoodActivation() uint32 { return n.ironwoodActivation() }
+
 // matchesChainName reports whether name is how a lightwalletd server on this
 // network identifies its chain.
 func (n Network) matchesChainName(name string) bool {
@@ -204,10 +209,16 @@ type PoolBalance struct {
 // unified address lands in the Ironwood pool.
 type AccountBalance struct {
 	// AccountID is the ID of the account, as in Account.
-	AccountID   string
-	Ironwood    PoolBalance
+	AccountID string
+	Ironwood  PoolBalance
+	// Transparent holds the regular transparent outputs: every transparent
+	// output whose transaction is not known to be a coinbase transaction.
 	Transparent PoolBalance
-	// Total is the sum of the pool totals.
+	// Coinbase holds the transparent outputs of coinbase transactions. A
+	// payment never spends them.
+	Coinbase PoolBalance
+	// Total is the sum of the totals of Ironwood, Transparent and
+	// Coinbase: everything the account holds, immature coinbase included.
 	Total uint64
 }
 

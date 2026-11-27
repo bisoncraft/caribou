@@ -48,6 +48,18 @@ type serverError struct {
 func (e *serverError) Error() string { return "lightwalletd " + e.op + ": " + e.err.Error() }
 func (e *serverError) Unwrap() error { return e.err }
 
+// Is matches ErrServerUnreachable for a failure of the connection and
+// ErrServerFailure for any other failure of the call.
+func (e *serverError) Is(target error) bool {
+	switch target {
+	case ErrServerUnreachable:
+		return isConnectionError(e)
+	case ErrServerFailure:
+		return !isConnectionError(e)
+	}
+	return false
+}
+
 // isServerError reports whether err came from the server side.
 func isServerError(err error) bool {
 	var se *serverError
@@ -78,6 +90,8 @@ type chainSource interface {
 	// addressTransactions calls fn for each mined transaction that involves
 	// the transparent address in the blocks from start through end.
 	addressTransactions(ctx context.Context, address string, start, end uint32, fn func(*walletrpc.RawTransaction) error) error
+	// sendTransaction submits a serialized transaction to the network.
+	sendTransaction(ctx context.Context, raw []byte) error
 	close() error
 }
 
@@ -146,6 +160,63 @@ func (c *lwdClient) info(ctx context.Context) (*walletrpc.LightdInfo, error) {
 		return nil, &serverError{"GetLightdInfo", err}
 	}
 	return info, nil
+}
+
+// sendTransaction submits a serialized transaction. The outcomes:
+//
+//   - The node refused the transaction: a *BroadcastRejectedError. lightwalletd
+//     and zebrad report a refusal in the reply, with the node's error code. A
+//     status of InvalidArgument, the reply to transaction data the server
+//     cannot take, is a refusal too.
+//   - The server could not be reached: a *serverError that matches
+//     ErrServerUnreachable.
+//   - Any other failure of the call, such as lightwalletd's Unknown status
+//     for a node it cannot reach or a reply it cannot parse: a *serverError
+//     that matches ErrServerFailure.
+//
+// A refusal, in the reply or as a status, that says precisely that the
+// transaction is already in the node's mempool counts as accepted. Every other refusal stays a refusal, also one
+// that reads as if the transaction were mined. Nothing is inferred from it:
+// the caller keeps the transaction pending and tries again.
+func (c *lwdClient) sendTransaction(ctx context.Context, raw []byte) error {
+	ctx, cancel := context.WithTimeout(ctx, rpcTimeout)
+	defer cancel()
+	resp, err := c.client.SendTransaction(ctx, &walletrpc.RawTransaction{Data: raw})
+	if err != nil {
+		if status.Code(err) == codes.InvalidArgument {
+			message := status.Convert(err).Message()
+			if inMempool(message) {
+				return nil
+			}
+			return &BroadcastRejectedError{Message: message}
+		}
+		return &serverError{"SendTransaction", err}
+	}
+	if resp.ErrorCode != 0 {
+		if inMempool(resp.ErrorMessage) {
+			return nil
+		}
+		return &BroadcastRejectedError{Code: resp.ErrorCode, Message: resp.ErrorMessage}
+	}
+	return nil
+}
+
+// The refusals that mean exactly that the node already holds the transaction
+// in its mempool: zebrad's, then zcashd's. zcashd's "txn-already-known" is not
+// among them, because it also covers a transaction in the chain.
+var inMempoolMessages = []string{
+	"transaction already exists in mempool",
+	"txn-already-in-mempool",
+}
+
+func inMempool(message string) bool {
+	message = strings.ToLower(message)
+	for _, m := range inMempoolMessages {
+		if strings.Contains(message, m) {
+			return true
+		}
+	}
+	return false
 }
 
 func (c *lwdClient) latestBlock(ctx context.Context) (*walletrpc.BlockID, error) {

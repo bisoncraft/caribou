@@ -37,7 +37,7 @@ func tOpenWallet(t *testing.T, dataDir string, create bool, adjust func(*asset.W
 		if _, err := rand.Read(seed); err != nil {
 			t.Fatalf("seed: %v", err)
 		}
-		err := drv.Create(&asset.CreateWalletParams{
+		err := drv.Create(t.Context(), &asset.CreateWalletParams{
 			Type:    walletTypeNative,
 			Seed:    seed,
 			Pass:    pass,

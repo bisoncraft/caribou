@@ -4,6 +4,7 @@
 package core
 
 import (
+	"context"
 	"sort"
 
 	"github.com/bisoncraft/caribou/util"
@@ -38,7 +39,7 @@ type tCreator struct {
 func (c *tCreator) Exists(_, _ string, _ map[string]string, _ util.Network) (bool, error) {
 	return false, c.existsErr
 }
-func (c *tCreator) Create(_ *asset.CreateWalletParams) error { return c.createErr }
+func (c *tCreator) Create(context.Context, *asset.CreateWalletParams) error { return c.createErr }
 
 // pokesCache holds a ring buffer of poke notifications.
 type pokesCache struct {

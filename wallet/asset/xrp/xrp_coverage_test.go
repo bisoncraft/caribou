@@ -261,7 +261,7 @@ func TestWalletLifecycle(t *testing.T) {
 	}
 
 	// Create.
-	if err := d.Create(&asset.CreateWalletParams{
+	if err := d.Create(t.Context(), &asset.CreateWalletParams{
 		Type:    walletTypeRPC,
 		Seed:    seed,
 		Pass:    pw,
@@ -463,7 +463,7 @@ func TestWalletTransactionFromTxReceiveIOU(t *testing.T) {
 
 func TestCreateEmptySeed(t *testing.T) {
 	d := &Driver{}
-	err := d.Create(&asset.CreateWalletParams{
+	err := d.Create(t.Context(), &asset.CreateWalletParams{
 		Type:    walletTypeRPC,
 		Seed:    nil,
 		DataDir: t.TempDir(),
@@ -475,7 +475,7 @@ func TestCreateEmptySeed(t *testing.T) {
 
 func TestCreateUnknownType(t *testing.T) {
 	d := &Driver{}
-	err := d.Create(&asset.CreateWalletParams{
+	err := d.Create(t.Context(), &asset.CreateWalletParams{
 		Type:    "unknown",
 		Seed:    []byte{1, 2, 3},
 		DataDir: t.TempDir(),

@@ -129,6 +129,7 @@ type clientCore interface {
 	FiatRates() map[uint32]float64
 	EstimateSendTxFee(address string, assetID uint32, value uint64, subtract, maxWithdraw bool) (*core.SendFeeEstimate, error)
 	ValidateAddress(address string, assetID uint32) (bool, error)
+	AddressReceivers(assetID uint32, address string) (*asset.AddressReceivers, error)
 	WalletPeers(assetID uint32) ([]*asset.WalletPeer, error)
 	AddWalletPeer(assetID uint32, addr string) error
 	RemoveWalletPeer(assetID uint32, addr string) error
@@ -601,6 +602,7 @@ func New(cfg *Config) (*AppServer, error) {
 			apiAuth.Post("/restorewalletinfo", s.apiRestoreWalletInfo)
 			apiAuth.Post("/toggleratesource", s.apiToggleRateSource)
 			apiAuth.Post("/validateaddress", s.apiValidateAddress)
+			apiAuth.Post("/addressreceivers", s.apiAddressReceivers)
 			apiAuth.Post("/txfee", s.apiEstimateSendTxFee)
 			apiAuth.Post("/getwalletpeers", s.apiGetWalletPeers)
 			apiAuth.Post("/addwalletpeer", s.apiAddWalletPeer)

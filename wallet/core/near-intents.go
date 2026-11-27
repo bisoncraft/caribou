@@ -1081,12 +1081,47 @@ func fromIntentsAmountRound(amount string, unitInfo *util.UnitInfo, decimals int
 	return v.Uint64(), nil
 }
 
-// intentsWalletAddress returns the wallet's own deposit address.
+// intentsWalletAddress returns the address of the wallet that a swap names:
+// the refund address of the origin wallet, the recipient of the destination
+// wallet. It is the wallet's own deposit address, reduced to its transparent
+// receiver when the wallet's addresses hold several receivers
+// (asset.ReceiverLister).
+//
+// The service is handed one address string and decides how to pay it. For
+// Zcash it documents transparent addresses as the only supported kind, so a
+// unified address would leave the choice of receiver, and whether the payment
+// can be made at all, to behavior the service does not specify. The
+// transparent receiver is an address the service is documented to pay and
+// the wallet watches. An address with no transparent receiver is an error
+// rather than a fallback to the full address.
+//
+// Both addresses are disclosed to the service, and one that is paid is public
+// on its chain. The deposit address is the one core holds, which is replaced
+// only when a new one is requested for receiving, and the Zcash wallet gives
+// a new one only after the held one has been paid. Consecutive swaps can
+// therefore name the same transparent address and be linked by it.
 func intentsWalletAddress(w *xcWallet) (string, error) {
-	if addr := w.currentDepositAddress(); addr != "" {
+	addr := w.currentDepositAddress()
+	if addr == "" {
+		var err error
+		if addr, err = w.refreshDepositAddress(); err != nil {
+			return "", err
+		}
+	}
+	lister, is := w.Wallet.(asset.ReceiverLister)
+	if !is {
 		return addr, nil
 	}
-	return w.refreshDepositAddress()
+	receivers, err := lister.AddressReceivers(addr)
+	if err != nil {
+		return "", fmt.Errorf("error listing the receivers of the %s address: %w", unbip(w.AssetID), err)
+	}
+	for _, r := range receivers.Receivers {
+		if r.Kind == asset.ReceiverTransparent {
+			return r.Address, nil
+		}
+	}
+	return "", fmt.Errorf("the %s address has no transparent receiver for a swap to pay", unbip(w.AssetID))
 }
 
 // intentsPair resolves both legs of a swap pair against the catalog and

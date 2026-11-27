@@ -80,7 +80,7 @@ func (m *MRPCTest) rpcClient(dir string, seed []byte, endpoints []string, net ut
 	}
 
 	chainID := cfg.ChainID.Int64()
-	if err := CreateEVMWallet(chainID, &asset.CreateWalletParams{
+	if err := CreateEVMWallet(m.ctx, chainID, &asset.CreateWalletParams{
 		Type: walletTypeRPC,
 		Seed: seed,
 		Pass: []byte("abc"),

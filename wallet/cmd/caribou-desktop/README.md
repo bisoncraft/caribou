@@ -26,6 +26,16 @@ go build -tags xmr -o caribou-desktop ./wallet/cmd/caribou-desktop
 Omit `-tags xmr` for a build without Monero support, which needs no native
 library.
 
+The `zec` tag adds Zcash. Its Rust library is linked statically, so nothing
+has to sit beside the executable, but it has to be built first with
+`wallet/asset/zec/zeclib/build.sh`; see `wallet/asset/zec/zeclib/README.md`
+for the requirements. The tag requires cgo, and a build with it fails without
+cgo. Only Linux is supported so far.
+
+```bash
+go build -tags xmr,zec -o caribou-desktop ./wallet/cmd/caribou-desktop
+```
+
 Every source file carries a `cgo` build constraint, so a `CGO_ENABLED=0`
 `go build ./...` from the root skips this package rather than failing.
 

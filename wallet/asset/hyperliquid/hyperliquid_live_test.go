@@ -358,7 +358,7 @@ func TestLiveCreateExists(t *testing.T) {
 	pw := make([]byte, 32)
 	rand.Read(pw)
 
-	if err := d.Create(&asset.CreateWalletParams{
+	if err := d.Create(t.Context(), &asset.CreateWalletParams{
 		Type:    "rpc",
 		Seed:    seed,
 		Pass:    pw,
@@ -397,7 +397,7 @@ func TestLiveCreateExists(t *testing.T) {
 
 	// Same seed → same address.
 	dir2 := t.TempDir()
-	d.Create(&asset.CreateWalletParams{
+	d.Create(t.Context(), &asset.CreateWalletParams{
 		Type: "rpc", Seed: seed, Pass: pw, DataDir: dir2,
 		Net: util.Testnet, Logger: tLogger,
 	})
@@ -420,7 +420,7 @@ func TestLiveCreateExists(t *testing.T) {
 	dir3 := t.TempDir()
 	wrongPW := make([]byte, 32)
 	rand.Read(wrongPW)
-	d.Create(&asset.CreateWalletParams{
+	d.Create(t.Context(), &asset.CreateWalletParams{
 		Type: "rpc", Seed: seed, Pass: pw, DataDir: dir3,
 		Net: util.Testnet, Logger: tLogger,
 	})
