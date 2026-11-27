@@ -53,6 +53,7 @@ func dashElectrumChainConfig(chainParams *chaincfg.Params) btc.ChainConfig {
 		NetParams:      dashTableNetParams(chainParams),
 		Info:           WalletInfo,
 		FeeRateSources: feeRateSources(),
+		Leases:         true,
 		// Enable the gap-limit address-discovery scan on every connect, matching
 		// BTC and LTC. Without it, a wallet restored from seed (or one that
 		// received funds while offline) never rediscovers its addresses, so its

@@ -42,6 +42,7 @@ const (
 	WalletTraitDeprContractGasTester                         // DEPRECATED. Left for ordering
 	WalletTraitPoliteiaVoter                                 // The wallet can vote on Politeia proposals.
 	WalletTraitDestinationTagger                             // The wallet's Send accepts a destination tag.
+	WalletTraitMasternodeOwner                               // The wallet owns shares of masternodes.
 )
 
 // IsRescanner tests if the WalletTrait has the WalletTraitRescanner bit set.
@@ -142,6 +143,12 @@ func (wt WalletTrait) IsDestinationTagger() bool {
 	return wt&WalletTraitDestinationTagger != 0
 }
 
+// IsMasternodeOwner tests if the WalletTrait has the WalletTraitMasternodeOwner
+// bit set, which indicates the wallet implements the MasternodeOwner interface.
+func (wt WalletTrait) IsMasternodeOwner() bool {
+	return wt&WalletTraitMasternodeOwner != 0
+}
+
 // DetermineWalletTraits returns the WalletTrait bitset for the provided Wallet.
 func DetermineWalletTraits(w Wallet) (t WalletTrait) {
 	if _, is := w.(Rescanner); is {
@@ -191,6 +198,9 @@ func DetermineWalletTraits(w Wallet) (t WalletTrait) {
 	}
 	if _, is := w.(DestinationTagger); is {
 		t |= WalletTraitDestinationTagger
+	}
+	if _, is := w.(MasternodeOwner); is {
+		t |= WalletTraitMasternodeOwner
 	}
 	return t
 }
@@ -1061,6 +1071,72 @@ type TicketStakingStatus struct {
 	Stances Stances `json:"stances"`
 	// Stats is statistical info about staking history.
 	Stats TicketStats `json:"stats"`
+}
+
+// MasternodeShare is one share of a shared masternode.
+type MasternodeShare struct {
+	Amount uint64 `json:"amount"`
+	// Own is true if the wallet owns the share.
+	Own bool `json:"own"`
+	// RefundScript and RewardScript are hex scripts, as registered.
+	RefundScript string `json:"refundScript"`
+	RewardScript string `json:"rewardScript"`
+}
+
+// Masternode is a shared masternode the wallet owns a share of, as registered
+// on chain. It holds nothing the server reported.
+type Masternode struct {
+	ProTxHash string `json:"proTxHash"`
+	// Collateral is the collateral outpoint as txid:vout.
+	Collateral       string             `json:"collateral"`
+	RegisteredHeight int32              `json:"registeredHeight"`
+	Shares           []*MasternodeShare `json:"shares"`
+	// Staked is the sum of the wallet's own shares, or 0 once the masternode
+	// is dissolved, as in the balance.
+	Staked            uint64 `json:"staked"`
+	EarlyPeriodBlocks uint32 `json:"earlyPeriodBlocks"`
+	EarlyPenalty      uint64 `json:"earlyPenalty"`
+	// DissolvedHeight is the height that spent the collateral, or 0.
+	DissolvedHeight int32 `json:"dissolvedHeight"`
+}
+
+// MasternodeKeys are the operator key and voting address of a masternode.
+type MasternodeKeys struct {
+	// OperatorPubKey is the hex 48 byte operator public key.
+	OperatorPubKey string `json:"operatorPubKey"`
+	VotingAddress  string `json:"votingAddress"`
+}
+
+// MasternodeStatus is a Masternode with what the server reports for it now.
+type MasternodeStatus struct {
+	Masternode
+	// State is active, banned, dissolved or unknown.
+	State string `json:"state"`
+	// KnownKeys are from the registration, and will include the keys of updates
+	// this wallet signed once those are stored. They are never from the server.
+	// A key to keep in an update may be copied only from here, so storing signed
+	// updates must come before an update path that keeps a key.
+	KnownKeys []*MasternodeKeys `json:"knownKeys"`
+	// ReportedKeys are what the server says now, unverified. Nil if there is
+	// no reply.
+	ReportedKeys *MasternodeKeys `json:"reportedKeys,omitempty"`
+	// ReportedKeysKnown is true if ReportedKeys equals an entry of KnownKeys,
+	// operator key and voting address together.
+	ReportedKeysKnown bool `json:"reportedKeysKnown"`
+	// LastPaidHeight is the server's last paid height, or -1 if not reported.
+	LastPaidHeight int32 `json:"lastPaidHeight"`
+	// ReportError is why the server's state is missing, if it is.
+	ReportError string `json:"reportError,omitempty"`
+}
+
+// MasternodeOwner is a wallet that owns shares of masternodes.
+type MasternodeOwner interface {
+	// Masternodes lists the wallet's masternodes as registered, oldest first,
+	// including dissolved ones. It makes no server call.
+	Masternodes(ctx context.Context) ([]*Masternode, error)
+	// MasternodeStatus is one masternode with the server's current state and
+	// keys.
+	MasternodeStatus(ctx context.Context, proTxHash string) (*MasternodeStatus, error)
 }
 
 // TicketBuyer is a wallet that can participate in decred staking.

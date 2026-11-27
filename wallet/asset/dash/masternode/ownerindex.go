@@ -6,8 +6,6 @@ package masternode
 
 import (
 	"fmt"
-
-	"github.com/btcsuite/btcd/btcutil"
 )
 
 // OwnerIndexStore hands out owner key indexes. An index must never be handed
@@ -35,11 +33,9 @@ func NewShareOwner(s OwnerIndexStore, d KeyDeriver, coinType uint32) (uint32, [2
 	if err != nil {
 		return 0, id, fmt.Errorf("reserve owner index: %w", err)
 	}
-	key, err := OwnerKey(d, coinType, idx)
+	id, err = ownerKeyID(d, coinType, idx)
 	if err != nil {
-		return 0, id, fmt.Errorf("derive owner key %d: %w", idx, err)
+		return 0, id, err
 	}
-	defer key.Zero()
-	copy(id[:], btcutil.Hash160(key.PubKey().SerializeCompressed()))
 	return idx, id, nil
 }

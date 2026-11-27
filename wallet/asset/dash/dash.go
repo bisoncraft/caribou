@@ -174,6 +174,9 @@ func newWallet(cfg *asset.WalletConfig, logger util.Logger, network util.Network
 
 	switch cfg.Type {
 	case walletTypeElectrum:
+		if sharedMasternodesEnabled(cfg.Type, params) {
+			return openDashSharedWallet(cfg, params, logger), nil
+		}
 		return openDashElectrumWallet(cfg, params, logger), nil
 	case walletTypeSPV:
 		// The SPV wallet is the same lean wallet as electrum, driven by the
