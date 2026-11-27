@@ -26,6 +26,12 @@ var (
 	// the transaction is valid.
 	ErrUnsupportedTx = errors.New("transaction not supported by this backend")
 
+	// ErrBackendUnavailable is returned when a transaction could not be sent
+	// because the backend could not be reached or did not answer, which says
+	// nothing about whether the transaction is valid. It may already be in
+	// the mempool, so the wallet keeps it.
+	ErrBackendUnavailable = errors.New("backend unavailable")
+
 	// ErrBeforeAnchor is returned by a backend's local header accessors for
 	// a height below the first header it holds: the checkpoint anchor on
 	// networks with checkpoints. Such a height is not an error of the

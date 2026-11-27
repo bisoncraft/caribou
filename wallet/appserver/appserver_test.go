@@ -62,7 +62,8 @@ func (c *tCoin) Confirmations(context.Context) (uint32, error) {
 }
 
 type TCore struct {
-	clientCore           // This is here so we don't have to implement core methods we're not testing
+	clientCore // This is here so we don't have to implement core methods we're not testing
+	tMasternodes
 	fiatRates            map[uint32]float64
 	balanceErr           error
 	loginErr             error
@@ -243,8 +244,65 @@ func (c *TCore) ListVSPs(assetID uint32) ([]*asset.VotingServiceProvider, error)
 	return nil, nil
 }
 
+// masternode stubs
+type tMasternodes struct {
+	mns       []*asset.Masternode
+	mnStatus  *asset.MasternodeStatus
+	mnErr     error
+	mnAssetID uint32
+	mnHash    string
+	// offers
+	mnOffer  *asset.MasternodeOffer
+	mnOffers []*asset.MasternodeOffer
+	mnReview *asset.MasternodeRegReview
+	mnSigned *asset.MasternodeRegSigned
+	mnTxID   string
+	mnArgs   []string
+}
+
 func (c *TCore) TicketPage(assetID uint32, scanStart int32, n, skipN int) ([]*asset.Ticket, error) {
 	return nil, nil
+}
+
+func (c *TCore) Masternodes(ctx context.Context, assetID uint32) ([]*asset.Masternode, error) {
+	c.mnAssetID = assetID
+	return c.mns, c.mnErr
+}
+
+func (c *TCore) MasternodeStatus(ctx context.Context, assetID uint32, proTxHash string) (*asset.MasternodeStatus, error) {
+	c.mnAssetID, c.mnHash = assetID, proTxHash
+	return c.mnStatus, c.mnErr
+}
+
+func (c *TCore) CreateMasternodeOffer(ctx context.Context, assetID uint32, pw []byte, amount uint64) (*asset.MasternodeOffer, error) {
+	c.mnAssetID = assetID
+	c.mnArgs = []string{string(pw), fmt.Sprint(amount)}
+	return c.mnOffer, c.mnErr
+}
+
+func (c *TCore) MasternodeOffers(ctx context.Context, assetID uint32) ([]*asset.MasternodeOffer, error) {
+	c.mnAssetID = assetID
+	return c.mnOffers, c.mnErr
+}
+
+func (c *TCore) CancelMasternodeOffer(ctx context.Context, assetID uint32, offerID string) error {
+	c.mnAssetID, c.mnArgs = assetID, []string{offerID}
+	return c.mnErr
+}
+
+func (c *TCore) ReviewMasternodeRegistration(ctx context.Context, assetID uint32, offerID, blob string) (*asset.MasternodeRegReview, error) {
+	c.mnAssetID, c.mnArgs = assetID, []string{offerID, blob}
+	return c.mnReview, c.mnErr
+}
+
+func (c *TCore) SignMasternodeRegistration(ctx context.Context, assetID uint32, pw []byte, offerID, blob, reviewID string) (*asset.MasternodeRegSigned, error) {
+	c.mnAssetID, c.mnArgs = assetID, []string{string(pw), offerID, blob, reviewID}
+	return c.mnSigned, c.mnErr
+}
+
+func (c *TCore) BroadcastMasternodeRegistration(ctx context.Context, assetID uint32, offerID, blob string) (string, error) {
+	c.mnAssetID, c.mnArgs = assetID, []string{offerID, blob}
+	return c.mnTxID, c.mnErr
 }
 
 func (c *TCore) TxHistory(assetID uint32, req *txdb.TxHistoryRequest) (*txdb.TxHistoryResponse, error) {

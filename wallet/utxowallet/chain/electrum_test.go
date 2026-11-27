@@ -284,6 +284,10 @@ func (s *stubNetwork) ListUnspent(_ context.Context, _ string) ([]electrum.Unspe
 // verifyInclusion call goes through first), so GetMerkle never mutates a header
 // and cannot race the concurrent header serialization in buildRelevantTx. Tests
 // exercising a LYING server override stub behavior instead.
+func (s *stubNetwork) ProTxInfo(context.Context, chainhash.Hash) (*electrum.ProTxInfo, error) {
+	return nil, electrum.ErrProTxUnsupported
+}
+
 func (s *stubNetwork) GetMerkle(_ context.Context, txid string, height int32) (*electrum.MerkleProof, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -720,6 +724,28 @@ func TestElectrumSendRawTransaction(t *testing.T) {
 	}
 	if len(stub.bcasted) != 1 {
 		t.Fatalf("expected 1 broadcast, got %d", len(stub.bcasted))
+	}
+}
+
+// TestElectrumSendRawTransactionErrors guards what a failed send says: only a
+// server's reply refuses a transaction. A send that got none, as with no
+// server or a request that timed out, is ErrBackendUnavailable, so the wallet
+// keeps a transaction that may be in the mempool.
+func TestElectrumSendRawTransactionErrors(t *testing.T) {
+	tx := wire.NewMsgTx(wire.TxVersion)
+	tx.AddTxIn(&wire.TxIn{PreviousOutPoint: wire.OutPoint{Index: 0}})
+	tx.AddTxOut(&wire.TxOut{Value: 100, PkScript: []byte{0x51}})
+	btx := &bisonwire.Tx{MsgTx: *tx, Chain: "btc"}
+
+	c, stub := makeClient(t, 1)
+	stub.bcastErr = context.DeadlineExceeded
+	if _, err := c.SendRawTransaction(btx, false); !errors.Is(err, ErrBackendUnavailable) {
+		t.Fatalf("a send with no answer: err = %v, want ErrBackendUnavailable", err)
+	}
+	stub.bcastErr = &electrum.RPCError{Code: 1, Message: "bad-txns-inputs-missingorspent"}
+	_, err := c.SendRawTransaction(btx, false)
+	if err == nil || errors.Is(err, ErrBackendUnavailable) {
+		t.Fatalf("a server's refusal: err = %v, want a refusal", err)
 	}
 }
 

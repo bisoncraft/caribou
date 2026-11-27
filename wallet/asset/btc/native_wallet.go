@@ -33,6 +33,7 @@ import (
 	"github.com/bisoncraft/caribou/wallet/utxowallet/wallet/txauthor"
 	"github.com/bisoncraft/caribou/wallet/utxowallet/walletdb"
 	_ "github.com/bisoncraft/caribou/wallet/utxowallet/walletdb/bdb" // bdb init() registers the walletdb driver
+	"github.com/bisoncraft/caribou/wallet/utxowallet/wtxmgr"
 	"github.com/btcsuite/btcd/btcjson"
 	"github.com/btcsuite/btcd/btcutil"
 	"github.com/btcsuite/btcd/chaincfg"
@@ -111,6 +112,21 @@ type ChainConfig struct {
 	// lean native wallet has no local fee-estimation RPC, so with an empty
 	// list FeeRate depends on the electrum fallback alone.
 	FeeRateSources []*feeratefetcher.SourceConfig
+	// OnTip, if set, is called with the new height each time blocks attach.
+	// It runs on the notification loop and must not block.
+	OnTip func(height int32)
+	// AdjustBalance, if set, can change the balance Balance is about to
+	// return, so that what a chain adds (a staked amount) is in every balance
+	// the wallet reports, including the ones it pushes itself. It must not
+	// block.
+	AdjustBalance func(*asset.Balance)
+	// Leases is set by a wallet whose outputs are leased with LeaseOutput. Only
+	// then does Balance read the leased amount, which it does not otherwise.
+	Leases bool
+	// OnOpen, if set, is called with the wallet once it is open and before it
+	// synchronizes with the chain, so a subscriber sees every transaction the
+	// synchronization records. It must not block.
+	OnOpen func(*wallet.Wallet)
 }
 
 // btcElectrumChainConfig returns the ChainConfig for the BTC electrum wallet.
@@ -456,6 +472,13 @@ func (w *NativeWallet) Info() *asset.WalletInfo {
 	return w.cfg.Info
 }
 
+// InnerWallet returns the underlying wallet, which is nil until Connect opens
+// it. It is for a chain's wrapper to reach what the shared wallet does not
+// expose.
+func (w *NativeWallet) InnerWallet() *wallet.Wallet {
+	return w.btcw
+}
+
 // Unlock unlocks the underlying wallet for spending. A nil lock channel keeps
 // it unlocked until Lock is called explicitly. Satisfies asset.Authenticator.
 func (w *NativeWallet) Unlock(pw []byte) error {
@@ -522,6 +545,9 @@ func (w *NativeWallet) Connect(ctx context.Context) (*sync.WaitGroup, error) {
 		return nil, fmt.Errorf("native: couldn't open wallet: %w", err)
 	}
 	w.btcw = btcw
+	if w.cfg.OnOpen != nil {
+		w.cfg.OnOpen(btcw)
+	}
 
 	errCloser := util.NewErrorCloser()
 	defer errCloser.Done(w.log)
@@ -644,12 +670,25 @@ func (w *NativeWallet) Balance() (*asset.Balance, error) {
 	if err != nil {
 		return nil, fmt.Errorf("native: balance error: %w", err)
 	}
-	return &asset.Balance{
+	// Leased outputs are set aside, so they are in neither Spendable nor the
+	// totals above: they are locked.
+	var leased btcutil.Amount
+	if w.cfg.Leases {
+		leased, err = w.btcw.LeasedBalance()
+		if err != nil {
+			return nil, fmt.Errorf("native: leased balance error: %w", err)
+		}
+	}
+	bal := &asset.Balance{
 		Available: uint64(bals.Spendable),
 		Immature:  uint64(bals.ImmatureReward),
-		Locked:    0,
+		Locked:    uint64(leased),
 		Other:     make(map[asset.BalanceCategory]asset.CustomBalance),
-	}, nil
+	}
+	if w.cfg.AdjustBalance != nil {
+		w.cfg.AdjustBalance(bal)
+	}
+	return bal, nil
 }
 
 // DepositAddress returns the next unused external address.
@@ -1067,6 +1106,9 @@ func (w *NativeWallet) blockLoop(ctx context.Context) {
 				// New block(s): advance the tip so core re-polls the balance
 				// and updates the sync height, then refresh tx history.
 				w.emit.TipChange(uint64(last.Height))
+				if w.cfg.OnTip != nil {
+					w.cfg.OnTip(last.Height)
+				}
 				go w.syncTxHistory(ctx, uint64(last.Height))
 			case len(note.UnminedTransactions) > 0:
 				// A new unconfirmed tx: an incoming receive still in the
@@ -1077,6 +1119,38 @@ func (w *NativeWallet) blockLoop(ctx context.Context) {
 			return
 		}
 	}
+}
+
+// LeaseOutput leases the output for duration, which sets it aside from the
+// spendable balance, and pushes the balance now and again when the lease ends,
+// as the wallet has no notification for either. It is for a wallet whose
+// ChainConfig has Leases set.
+func (w *NativeWallet) LeaseOutput(id wtxmgr.LockID, op wire.OutPoint, duration time.Duration) (time.Time, error) {
+	if w.btcw == nil {
+		return time.Time{}, errors.New("native: wallet not connected")
+	}
+	expiry, err := w.btcw.LeaseOutput(id, op, duration)
+	if err != nil {
+		return time.Time{}, err
+	}
+	w.PushBalance()
+	time.AfterFunc(time.Until(expiry)+time.Second, func() {
+		if ctx, _ := w.ctx.Load().(context.Context); ctx != nil && ctx.Err() == nil {
+			w.PushBalance()
+		}
+	})
+	return expiry, nil
+}
+
+// PushBalance reads the balance and emits it, for a change the wallet's own
+// notifications do not carry.
+func (w *NativeWallet) PushBalance() {
+	bal, err := w.Balance()
+	if err != nil {
+		w.log.Errorf("native: balance: %v", err)
+		return
+	}
+	w.emit.BalanceChange(bal)
 }
 
 // handleUnminedTxChange records newly-seen unconfirmed transactions and pushes

@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"os"
 	"testing"
 	"time"
@@ -249,5 +250,96 @@ func TestResendUnminedTxsKeepsTxWhenBackendCannotRelay(t *testing.T) {
 
 	if storedTx(t, w, tx.TxHash()) == nil {
 		t.Fatal("resend deleted a tx the backend only could not relay")
+	}
+}
+
+// TestPublishBisonTxKeepsTxWhenBackendUnavailable guards a republish the
+// backend never answered: the tx was already stored, so it may be in the mempool, so it is not evidence the tx
+// is invalid, and the wallet must not delete it and stop counting its inputs
+// as spent.
+func TestPublishBisonTxKeepsTxWhenBackendUnavailable(t *testing.T) {
+	rec := &publishRecorder{mockChainClient: &mockChainClient{}}
+	w := testDashWallet(t, rec)
+	tx := decodeDashSpecialTx(t)
+	if err := w.PublishBisonTx(tx, ""); err != nil {
+		t.Fatalf("PublishBisonTx: %v", err)
+	}
+
+	rec.err = chain.ErrBackendUnavailable
+	if err := w.PublishBisonTx(tx, ""); !errors.Is(err, chain.ErrBackendUnavailable) {
+		t.Fatalf("err = %v, want chain.ErrBackendUnavailable", err)
+	}
+	if storedTx(t, w, tx.TxHash()) == nil {
+		t.Fatal("an unreachable backend deleted the stored tx")
+	}
+}
+
+// TestPublishBisonTxRemovesNewTxWhenBackendUnavailable guards a new send the
+// backend never answered: keeping it would leave its inputs marked spent while
+// the caller sees a failure, and a retry would build a second payment from
+// other coins.
+func TestPublishBisonTxRemovesNewTxWhenBackendUnavailable(t *testing.T) {
+	rec := &publishRecorder{mockChainClient: &mockChainClient{}}
+	w := testDashWallet(t, rec)
+	tx := decodeDashSpecialTx(t)
+
+	rec.err = fmt.Errorf("%w: dial timeout", chain.ErrBackendUnavailable)
+	if err := w.PublishBisonTx(tx, ""); !errors.Is(err, chain.ErrBackendUnavailable) {
+		t.Fatalf("err = %v, want chain.ErrBackendUnavailable", err)
+	}
+	if storedTx(t, w, tx.TxHash()) != nil {
+		t.Fatal("a new send the backend never answered was kept")
+	}
+}
+
+// TestResendUnminedTxsKeepsTxWhenBackendUnavailable guards a rebroadcast the
+// backend never answered: the tx may already be in the mempool, so the wallet
+// must not delete it.
+func TestResendUnminedTxsKeepsTxWhenBackendUnavailable(t *testing.T) {
+	rec := &publishRecorder{mockChainClient: &mockChainClient{}}
+	w := testDashWallet(t, rec)
+	tx := decodeDashSpecialTx(t)
+	if err := w.PublishBisonTx(tx, ""); err != nil {
+		t.Fatalf("PublishBisonTx: %v", err)
+	}
+	rec.err = chain.ErrBackendUnavailable
+
+	w.resendUnminedTxs()
+
+	if storedTx(t, w, tx.TxHash()) == nil {
+		t.Fatal("resend deleted a tx the backend was only unreachable for")
+	}
+}
+
+// TestPublishBisonTxKeepsTxTheBackendHasWhenAsked guards a transaction whose
+// owner has to see it until the wallet has its block: when the backend says it
+// is already in a block the wallet keeps its record, where it drops it for any
+// other transaction, so the owner is not told it is gone while it is mined.
+func TestPublishBisonTxKeepsTxTheBackendHasWhenAsked(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		keep func(*bisonwire.Tx) bool
+		want bool
+	}{
+		{"not asked", nil, false},
+		{"asked", func(*bisonwire.Tx) bool { return true }, true},
+		{"asked for another", func(*bisonwire.Tx) bool { return false }, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := &publishRecorder{mockChainClient: &mockChainClient{}}
+			w := testDashWallet(t, rec)
+			w.KeepUnminedOnConfirmed(tc.keep)
+			tx := decodeDashSpecialTx(t)
+			if err := w.PublishBisonTx(tx, ""); err != nil {
+				t.Fatalf("PublishBisonTx: %v", err)
+			}
+			rec.err = chain.ErrTxAlreadyConfirmed
+			if err := w.PublishBisonTx(tx, ""); err != nil {
+				t.Fatalf("republish: %v", err)
+			}
+			if got := storedTx(t, w, tx.TxHash()) != nil; got != tc.want {
+				t.Fatalf("stored = %v, want %v", got, tc.want)
+			}
+		})
 	}
 }
