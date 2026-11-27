@@ -54,9 +54,9 @@ func accepted(t *testing.T, raw []byte) (bool, string) {
 
 // registerHarnessMN registers a two-share masternode on the harness: consent,
 // Core signs the funding, broadcast, mined. The owners' keys are the test's.
-func registerHarnessMN(t *testing.T) (*SharedMN, []*btcec.PrivateKey) {
+func registerHarnessMN(t *testing.T, fixed ...*btcec.PrivateKey) (*SharedMN, []*btcec.PrivateKey) {
 	t.Helper()
-	p, owns, keys := harnessProposal(t)
+	p, owns, keys := harnessProposal(t, fixed...)
 
 	// Register the masternode: consent, Core signs the funding, broadcast, mine.
 	tx, err := p.Build(RegtestRules)
